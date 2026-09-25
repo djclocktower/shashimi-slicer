@@ -62,6 +62,7 @@
 #include "libslic3r/BuildVolume.hpp"
 #include "slic3r/GUI/MainFrame.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
+#include "slic3r/GUI/ObjectDataViewModel.hpp"
 
 // English-only pin for the Design tab (see design-ux-contract): one lever
 // de-translates this whole TU so our strings never half-translate against the host's
@@ -339,7 +340,7 @@ DesignPanel::DesignPanel(wxWindow* parent)
     sk_key('E', DesignSketchTool::Mode::Ellipse,      _L("Ellipse — center, major end, minor point"));
     sk_key('B', DesignSketchTool::Mode::BSpline,      _L("Spline — click control points"));
     sk_key('P', DesignSketchTool::Mode::Point,        _L("Point — click to place"));
-    sk_key('D', DesignSketchTool::Mode::Dimension,    _L("Dimension — click 2 points or an entity"));
+    sk_key('D', DesignSketchTool::Mode::Dimension,    _L("Smart Dimension — select an entity or point to dimension"));
     sk_key('T', DesignSketchTool::Mode::Trim,         _L("Trim — click a segment to trim it"));
     sk_key('X', DesignSketchTool::Mode::Extend,       _L("Extend — click a line/arc to extend it"));
     sk_key('O', DesignSketchTool::Mode::Offset,       _L("Offset — pick an entity, drag the distance"));
@@ -1507,6 +1508,16 @@ DesignPanel::DesignPanel(wxWindow* parent)
         m_revolve_mode->SetSelection(0);
         rform->Add(new wxStaticText(m_cards, wxID_ANY, _L("Mode")), 0, wxALIGN_CENTER_VERTICAL);
         rform->Add(m_revolve_mode, 0, wxEXPAND);
+        // Revolve1 <-> Cut-Revolve1 and the boss/cut icon in the header as the mode changes.
+        m_revolve_mode->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent& e) {
+            if (m_active == Tool::Revolve) {
+                if (m_edit_index < 0 && m_hdr_revolve != nullptr)
+                    m_hdr_revolve->SetLabel(wxString::FromUTF8(next_feature_name(
+                        CadFeatureType::Revolve, BooleanMode(m_revolve_mode->GetSelection()))));
+                update_cards_frame();
+            }
+            e.Skip();
+        });
 
         m_revolve_flip = new CheckBox(m_cards);
         rform->Add(new wxStaticText(m_cards, wxID_ANY, _L("Flip direction")), 0, wxALIGN_CENTER_VERTICAL);
@@ -2716,6 +2727,7 @@ DesignPanel::DesignPanel(wxWindow* parent)
                 edited.entities           = ents;
                 edited.entity_constraints = cons;
                 edited.plane              = plane;
+                edited.dimensions         = m_viewport->sketch_dimensions();
                 if (m_doc.replace_feature(m_edit_index, edited)) {
                     if (!cons.empty()) m_doc.solve_sketch_feature(m_edit_index);
                     m_doc.recompute();
@@ -2728,13 +2740,14 @@ DesignPanel::DesignPanel(wxWindow* parent)
                 return;
             }
             const int sk = m_doc.add_sketch_entities(ents, plane,
-                               next_feature_name(CadFeatureType::Sketch), cons);
+                               next_feature_name(CadFeatureType::Sketch), cons,
+                               m_viewport->sketch_dimensions());
             if (!cons.empty()) m_doc.solve_sketch_feature(sk);   // enforce driving dimensions
             m_doc.recompute();
             m_status->SetForegroundColour(wxNullColour);
             set_status(cons.empty()
                 ? _L("Sketch created — select it, then right-click to Extrude")
-                : wxString::Format(_L("Sketch created (%zu driving dims) — select it, then right-click to Extrude"),
+                : wxString::Format(_L("Sketch created (%zu relations) — select it, then right-click to Extrude"),
                                    cons.size()));
             refresh_tree();
             sync_sketch_display();   // keep the just-committed sketch visible as a face
@@ -3605,6 +3618,7 @@ void DesignPanel::select_sketch_tool(int mode_i, const wxString& hint)
         wxString on;
         const SketchPlane plane = sketch_plane_from_selection(on);
         m_viewport->begin_sketch(plane, mode);
+        m_viewport->view_normal_to_sketch();   // SolidWorks turns the view square to a new sketch
         m_construction = false;            // a fresh session starts non-construction
         m_sketch_on   = on;                // shown with the tool hint, so the target is visible
         m_plane_fresh = false;             // the pick is spent on this sketch
@@ -3643,7 +3657,7 @@ bool DesignPanel::fresh_sketch_target(wxString& what) const
     return m_plane_fresh && sketch_plane_target(what);
 }
 
-void DesignPanel::ribbon_sketch_tool(int mode, const wxString& hint, bool construction, bool view_normal)
+void DesignPanel::ribbon_sketch_tool(int mode, const wxString& hint, bool construction)
 {
     if (!m_viewport) return;
     if (m_active != Tool::None) cancel_tool();                      // a feature command gives way
@@ -3657,7 +3671,6 @@ void DesignPanel::ribbon_sketch_tool(int mode, const wxString& hint, bool constr
             m_pending_sketch_mode  = mode;
             m_pending_sketch_hint  = hint;
             m_pending_construction = construction;
-            m_pending_view_normal  = view_normal;
             m_status->SetForegroundColour(wxNullColour);
             set_status(_L("Select a plane or planar face to sketch on"));
             m_status->Refresh();
@@ -3669,21 +3682,23 @@ void DesignPanel::ribbon_sketch_tool(int mode, const wxString& hint, bool constr
                 m_form->Layout();
             }
             show_left_page(false);   // the FeatureManager lists the planes to pick from
+            // A click on an already-selected row reports nothing, so a plane left selected by an
+            // earlier pick could not be picked again for this sketch.
+            if (m_ftree) m_ftree->clear_selection();
+            m_viewport->set_highlighted_sketch(-1);
             update_ribbon_state();
             return;
         }
     }
-    const bool fresh = !m_viewport->is_sketching();
     select_sketch_tool(mode, hint);
     if (m_construction != construction)
         set_construction(construction);   // Centerline = a construction line
-    if (fresh && view_normal) m_viewport->view_normal_to_sketch();
 }
 
 void DesignPanel::start_sketch_command()
 {
     ribbon_sketch_tool(int(DesignSketchTool::Mode::Select),
-                       _L("Sketch open — pick a tool in the CommandManager"), false, true);
+                       _L("Sketch open — pick a tool in the CommandManager"));
 }
 
 void DesignPanel::fire_pending_sketch_tool()
@@ -3694,11 +3709,10 @@ void DesignPanel::fire_pending_sketch_tool()
     const int      mode = m_pending_sketch_mode;
     const wxString hint = m_pending_sketch_hint;
     const bool     cons = m_pending_construction;
-    const bool     vn   = m_pending_view_normal;
     m_pending_sketch_mode = -1;
     // After the pick that answered the prompt: the viewport is still dispatching that click.
-    CallAfter([this, mode, hint, cons, vn] {
-        if (m_ui_mode == UiMode::Sketch) ribbon_sketch_tool(mode, hint, cons, vn);
+    CallAfter([this, mode, hint, cons] {
+        if (m_ui_mode == UiMode::Sketch) ribbon_sketch_tool(mode, hint, cons);
     });
 }
 
@@ -3750,7 +3764,7 @@ void DesignPanel::set_construction(bool on)
     m_construction = on;
     if (m_viewport && m_viewport->is_sketching())
         m_viewport->set_sketch_construction(on);
-    if (m_ribbon) m_ribbon->check("construction", on);
+    update_ribbon_state();   // the mode label says when construction is armed
 }
 
 void DesignPanel::update_ribbon_state()
@@ -3769,10 +3783,25 @@ void DesignPanel::update_ribbon_state()
                             [this] { if (m_ui_mode != UiMode::Feature) tool_confirm(); else start_sketch_command(); }});
     }
     m_ribbon->enable("cancel_sketch", in_sketch);
+    // A ribbon sketch tool still waiting for its plane: no sketch is being edited yet.
+    const bool     waiting = m_pending_sketch_mode >= 0 && m_viewport && !m_viewport->is_sketching();
+    const wxString name    = wxString::FromUTF8(editing_sketch_name());
+    if (m_sketch_banner_txt != nullptr && m_ui_mode == UiMode::Sketch) {
+        const wxString txt = waiting
+            ? wxString::Format(_L("Select a plane or planar face for %s"), name)
+            : wxString::Format(_L("Editing %s   ·   N = look normal to the plane   ·   "
+                                  "Exit Sketch or Cancel in the CommandManager"), name);
+        if (m_sketch_banner_txt->GetLabel() != txt) {
+            m_sketch_banner_txt->SetLabel(txt);
+            if (m_sketch_banner) m_sketch_banner->Layout();
+        }
+    }
     if (m_sketch_mode_label) {
+        // Short: the label sits in the ribbon's tail, and a long one squeezes the tools off it.
         const wxString txt = !in_sketch ? _L("Sketch")
                            : m_ui_mode == UiMode::Constrain ? _L("Relations")
-                           : wxString::FromUTF8(editing_sketch_name());   // the sketch being edited
+                           : waiting ? _L("Select a plane")
+                           : name + (m_construction ? _L(" · Construction") : wxString());
         if (m_sketch_mode_label->GetLabel() != txt) {
             m_sketch_mode_label->SetLabel(txt);
             m_sketch_mode_label->GetParent()->Layout();
@@ -3781,7 +3810,6 @@ void DesignPanel::update_ribbon_state()
     m_ribbon->check("section_view", m_section_on);
     m_ribbon->enable("flip_section", m_section_on);
     m_ribbon->check("show_bed", m_show_bed);
-    m_ribbon->check("construction", m_construction);
 }
 
 std::string DesignPanel::next_name(const std::string& prefix) const
@@ -3916,6 +3944,10 @@ void DesignPanel::on_tree_selected(int kind_i, int index)
     using K = CadFeatureTree::NodeKind;
     const K kind = K(kind_i);
     if (m_viewport == nullptr) return;
+    // A selected sketch shows its dimensions; any other row (or none) clears them.
+    const bool sketch_row = kind == K::Feature && index >= 0 && index < int(m_doc.features.size())
+                         && m_doc.features[index].type == CadFeatureType::Sketch;
+    m_viewport->set_highlighted_sketch(sketch_row ? index : -1);
     if (kind == K::Body) {
         // Taking a body from the tree means the SAME state change however it was asked for: a
         // stale vertex/edge from an earlier viewport pick must go, or the offer (which tests the
@@ -4109,7 +4141,7 @@ void DesignPanel::build_ribbon()
     // Smart Dimension arms the sketch tool's Dimension mode — the D key's path.
     r->add_button(S, "smart_dimension", {"sw_smart_dimension", _L("Smart\nDimension"),
                                          _L("Smart Dimension (D) — click an entity, or two, to dimension them"),
-                                         [this] { ribbon_sketch_tool(int(Mode::Dimension), _L("Dimension — click 2 points or an entity")); }},
+                                         [this] { ribbon_sketch_tool(int(Mode::Dimension), _L("Smart Dimension — select an entity or point to dimension")); }},
                   true);
     r->add_separator(S);
     r->add_flyout(S, "line", {
@@ -4126,7 +4158,7 @@ void DesignPanel::build_ribbon()
         sk(Mode::TwoPointCircle,   "Perimeter\nCircle", "design_circle2pt", "Perimeter Circle — click the two ends of a diameter"),
         sk(Mode::ThreePointCircle, "3 Point\nCircle",  "design_circle3pt", "3 Point Circle — click three points on the circle") });
     r->add_flyout(S, "arc", {
-        sk(Mode::CenterArc,     "Centerpoint\nArc", "design_arc_center", "Centerpoint Arc — center, start, then a point for the end"),
+        sk(Mode::CenterArc,     "Center\nArc",     "design_arc_center", "Centerpoint Arc — center, start, then a point for the end"),
         sk(Mode::TangentArc,    "Tangent\nArc",     "design_tangentarc", "Tangent Arc — start on the last entity, then the end"),
         sk(Mode::ThreePointArc, "3 Point\nArc",     "design_arc3pt",     "3 Point Arc (A) — start, end, then a point on the arc") });
     r->add_flyout(S, "slot", {
@@ -4159,18 +4191,18 @@ void DesignPanel::build_ribbon()
     r->add_button(S, "spline", sk(Mode::BSpline, "Spline", "design_bspline", "Spline (B) — click control points; double-click to finish"));
     r->add_button(S, "point",  sk(Mode::Point,   "Point",  "design_point",   "Point (P) — click to place"));
     r->add_separator(S);
-    r->add_button(S, "trim",   sk(Mode::Trim,    "Trim\nEntities",   "design_trim",       "Trim Entities (T) — click a segment to trim it to its nearest intersection"));
-    r->add_button(S, "extend", sk(Mode::Extend,  "Extend\nEntities", "design_extend",     "Extend Entities (X) — click a line or arc to extend it to the next entity"));
-    r->add_button(S, "offset", sk(Mode::Offset,  "Offset\nEntities", "design_offset",     "Offset Entities (O) — pick an entity, then drag or type the distance"));
-    r->add_button(S, "mirror_sk", sk(Mode::Mirror, "Mirror\nEntities", "design_mirror",   "Mirror Entities (M) — pick the mirror line, then the entities"));
-    r->add_button(S, "fillet_sk", sk(Mode::Fillet, "Sketch\nFillet",   "design_filletedge", "Sketch Fillet (F) — pick two lines, then set the radius"));
-    r->add_button(S, "chamfer_sk", sk(Mode::Chamfer, "Sketch\nChamfer", "design_chamfer",   "Sketch Chamfer (H) — pick two lines, then set the distance"));
+    r->add_button(S, "trim",   sk(Mode::Trim,    "Trim",   "design_trim",       "Trim Entities (T) — click a segment to trim it to its nearest intersection"));
+    r->add_button(S, "extend", sk(Mode::Extend,  "Extend", "design_extend",     "Extend Entities (X) — click a line or arc to extend it to the next entity"));
+    r->add_button(S, "offset", sk(Mode::Offset,  "Offset", "design_offset",     "Offset Entities (O) — pick an entity, then drag or type the distance"));
+    r->add_button(S, "mirror_sk", sk(Mode::Mirror, "Mirror", "design_mirror",   "Mirror Entities (M) — pick the mirror line, then the entities"));
+    r->add_button(S, "fillet_sk", sk(Mode::Fillet, "Fillet",  "design_filletedge", "Sketch Fillet (F) — pick two lines, then set the radius"));
+    r->add_button(S, "chamfer_sk", sk(Mode::Chamfer, "Chamfer", "design_chamfer",   "Sketch Chamfer (H) — pick two lines, then set the distance"));
     r->add_separator(S);
-    r->add_button(S, "lpattern_sk", sk(Mode::Array,      "Linear\nPattern",   "design_array",      "Linear Sketch Pattern — pick entities, drag the spacing, set the count"));
-    r->add_button(S, "cpattern_sk", sk(Mode::PolarArray, "Circular\nPattern", "design_polararray", "Circular Sketch Pattern — pick entities, drag the sweep, set the count"));
-    r->add_button(S, "move_sk",   sk(Mode::Move,   "Move\nEntities",   "design_move",   "Move Entities — pick entities, then drag or type the distance"));
-    r->add_button(S, "rotate_sk", sk(Mode::Rotate, "Rotate\nEntities", "design_rotate", "Rotate Entities — pick entities, then drag or type the angle"));
-    r->add_button(S, "scale_sk",  sk(Mode::Scale,  "Scale\nEntities",  "design_scale",  "Scale Entities — pick entities, then drag or type the factor"));
+    r->add_button(S, "lpattern_sk", sk(Mode::Array,      "Linear\nPat.", "design_array",      "Linear Sketch Pattern — pick entities, drag the spacing, set the count"));
+    r->add_button(S, "cpattern_sk", sk(Mode::PolarArray, "Circ.\nPat.",  "design_polararray", "Circular Sketch Pattern — pick entities, drag the sweep, set the count"));
+    r->add_button(S, "move_sk",   sk(Mode::Move,   "Move",   "design_move",   "Move Entities — pick entities, then drag or type the distance"));
+    r->add_button(S, "rotate_sk", sk(Mode::Rotate, "Rotate", "design_rotate", "Rotate Entities — pick entities, then drag or type the angle"));
+    r->add_button(S, "scale_sk",  sk(Mode::Scale,  "Scale",  "design_scale",  "Scale Entities — pick entities, then drag or type the factor"));
     r->add_separator(S);
     {
         struct Rel { const char* icon; const char* label; SketchConstraintType type; };
@@ -4205,7 +4237,7 @@ void DesignPanel::build_ribbon()
                                                _L("Add Relation — to the selected sketch entities"), nullptr},
                            std::move(items));
     }
-    r->add_button(S, "relations", {"sw_display_relations", _L("Display/Delete\nRelations"),
+    r->add_button(S, "relations", {"sw_display_relations", _L("Relations"),
                                    _L("Display/Delete Relations — list the sketch's relations; the ✗ deletes one"),
                                    [this] {
                                        // Outside a sketch: Constrain the selected (or last) sketch.
@@ -4216,31 +4248,31 @@ void DesignPanel::build_ribbon()
                                        show_left_page(true);
                                    }});
     r->add_separator(S);
-    r->add_flyout(S, "sketch_text", {
-        {"design_text", _L("Text"),       _L("Sketch Text — emboss text as a profile"), verb("btn:text"), true},
-        {"design_svg",  _L("Import\nSVG"), _L("Import an SVG outline as a profile"),     verb("btn:svg"),  true} });
-    r->add_button(S, "normal_to", {"sw_normal_to", _L("Normal\nTo"), _L("Normal To (N) — look straight at the sketch plane"),
-                                   key(true, 'N')});
-    // Q's semantics on the control that carries the word: with geometry selected (in Select mode)
-    // it CONVERTS that geometry, as users arriving from other sketchers expect; otherwise it arms
-    // construction for what is drawn next. The checked state is the mode indicator.
-    r->add_button(S, "construction", {"sw_centerline", _L("For\nConstruction"),
-                                      _L("For Construction (Q) — convert the selection, or draw construction geometry next"),
-                                      [this] {
-                                          // ONLY IN SELECT MODE. Drawing auto-selects what was just drawn, so with a
-                                          // draw tool armed a selection does not mean the user picked anything, and
-                                          // converting there would turn the line just drawn instead of disarming.
-                                          const int n = (m_viewport && m_viewport->is_sketching() && m_viewport->sketch_is_selecting())
-                                                      ? m_viewport->toggle_sketch_construction_selection() : 0;
-                                          if (n > 0) {
-                                              m_status->SetForegroundColour(wxNullColour);
-                                              set_status(wxString::Format(_L("Converted %d entit%s between construction and real geometry"),
-                                                                          n, n == 1 ? "y" : "ies"));
-                                              m_status->Refresh();
-                                              return;
-                                          }
-                                          set_construction(!m_construction);
-                                      }, true});
+    // Rarely used: one menu, so the page fits a 1366 px window. For Construction's state shows in
+    // the mode label (update_ribbon_state) now that it has no button of its own to check.
+    // Q's semantics: with geometry selected (in Select mode) it CONVERTS that geometry, as users
+    // arriving from other sketchers expect; otherwise it arms construction for what is drawn next.
+    auto construction = [this] {
+        // ONLY IN SELECT MODE. Drawing auto-selects what was just drawn, so with a draw tool
+        // armed a selection does not mean the user picked anything, and converting there would
+        // turn the line just drawn instead of disarming.
+        const int n = (m_viewport && m_viewport->is_sketching() && m_viewport->sketch_is_selecting())
+                    ? m_viewport->toggle_sketch_construction_selection() : 0;
+        if (n > 0) {
+            m_status->SetForegroundColour(wxNullColour);
+            set_status(wxString::Format(_L("Converted %d entit%s between construction and real geometry"),
+                                        n, n == 1 ? "y" : "ies"));
+            m_status->Refresh();
+            return;
+        }
+        set_construction(!m_construction);
+    };
+    r->add_menu_button(S, "more_sk", {"sw_more", _L("More"), _L("Sketch Text, Import SVG, Normal To, For Construction"), nullptr}, {
+        {"design_text",   _L("Sketch Text"),      _L("Sketch Text — emboss text as a profile"), verb("btn:text"), true},
+        {"design_svg",    _L("Import SVG"),       _L("Import an SVG outline as a profile"),     verb("btn:svg"),  true},
+        {"sw_normal_to",  _L("Normal To (N)"),    _L("Normal To — look straight at the sketch plane"), key(true, 'N')},
+        {"sw_centerline", _L("For Construction (Q)"),
+         _L("For Construction — convert the selection, or draw construction geometry next"), construction, true} });
     m_sketch_mode_label = new wxStaticText(r->tail_window(S), wxID_ANY, _L("Sketch"));
     {
         wxFont f = Label::Head_14;
@@ -4316,6 +4348,7 @@ void DesignPanel::build_ribbon()
     gate(r->add_menu_button(F, "move_copy", {"sw_move_body", _L("Move/Copy\nBodies"), _L("Move, copy, mate and colour bodies"), nullptr}, {
         {"sw_move_body",  _L("Move/Copy Body"), _L("Transform (Shift+Y) — move and/or rotate a body, optionally a copy"), feature(verb("fly:placement#0"))},
         {"sw_move_body",  _L("Move Body (drag)"), _L("Drag the selected body with the move gizmo"),                       feature([this] { on_move_body(); })},
+        {"sw_place_on_face", _L("Place on Face"), _L("Place on Face (F) — lay the picked face on the bed"),              feature([this] { place_on_face(); })},
         {"sw_mate",       _L("Mate"),           _L("Mate two coordinate systems (assembly)"),                             feature(verb("fly:placement#2"))},
         {"sw_appearance", _L("Appearance…"),    _L("Set the selected body's display colour"),                             verb("btn:colour")} }),
          1, "Move/Copy Bodies — needs a solid body");
@@ -4331,9 +4364,6 @@ void DesignPanel::build_ribbon()
                                       [this] { toggle_section_view(); }});
     r->add_button(F, "flip_section", {"sw_flip_section", _L("Flip\nSection"), _L("Flip Section (F) — show the opposite half"),
                                       [this] { flip_section_view(); }});
-    gate(r->add_button(F, "place_on_face", {"sw_place_on_face", _L("Place on\nFace"), _L("Place on Face (F) — lay the picked face on the bed"),
-                                            feature([this] { place_on_face(); })}),
-         1, "Place on Face — needs a solid body");
     r->add_menu_button(F, "evaluate", {"sw_evaluate", _L("Evaluate"), _L("Mass properties, interference, STEP export"), nullptr}, {
         {"sw_evaluate",    _L("Mass Properties"),    _L("Volume, area and centre of mass of the selected solid"), verb("btn:mass")},
         {"sw_combine",     _L("Interference Detection"), _L("Find overlapping bodies"),                          [this] { on_check_interference(); }},
@@ -4441,12 +4471,7 @@ void DesignPanel::set_ui_mode(UiMode m)
     // taking the floor away as well only made the sketch harder to draw. The Bed checkbox is the
     // one thing that governs the bed, in every mode.
     if (m_sketch_banner != nullptr) {
-        const bool sketching = (m == UiMode::Sketch);
-        if (sketching && m_sketch_banner_txt != nullptr)
-            m_sketch_banner_txt->SetLabel(
-                wxString::Format(_L("Editing %s   ·   N = look normal to the plane   ·   "
-                                    "Exit Sketch or Cancel in the CommandManager"),
-                                 wxString::FromUTF8(editing_sketch_name())));
+        const bool sketching = (m == UiMode::Sketch);   // its text: update_ribbon_state
         m_sketch_banner->Show(sketching);
         m_sketch_banner->GetParent()->Layout();
     }
@@ -6158,8 +6183,9 @@ static wxString sketch_step_prompt(DesignSketchTool::Mode m, int step, int picks
                                   "Tangent, Equal…)"), picks)
             : _L("Constrain — click one or two entities, then choose a constraint");
     case Mode::Dimension:
-        return step == 0 ? _L("Dimension — click an entity, or the first of two points")
-                         : _L("Dimension — click the second point");
+        return step == 0 ? _L("Select an entity or point to dimension")
+             : step == 1 ? _L("Move to preview · click empty space to place · or click a second entity/point")
+                         : _L("Click to place the dimension");
     case Mode::Line:
         return step == 0 ? _L("Line — click the start point")
                          : _L("Line — click the end point, or type the length");
@@ -6975,6 +7001,7 @@ void DesignPanel::load_recipe(const std::string& blob)
     }
     feed_bodies();    // push the restored bodies into the viewport
     refresh_tree();   // rebuild the feature tree from the restored recipe
+    m_match_plate_names = true;   // this project's plate objects came from these bodies
     set_status_ok();
 }
 
@@ -7329,6 +7356,8 @@ void DesignPanel::clear_document()
 {
     tool_cancel();                 // leave any active tool / sketch / constrain cleanly
     m_doc.clear();                 // features + bodies + meshes + history
+    m_sent_objects.clear();        // a new design updates none of the old one's plate objects
+    m_match_plate_names = false;
     m_edit_index = -1;
     m_move_body  = -1;
     show_move_card(false);
@@ -7820,6 +7849,10 @@ wxString DesignPanel::constraint_label(const SketchEntityConstraintDef& d) const
     case T::Diameter:      return wxString::Format("%s %s = %s", _L("Diameter"), tag(d.ea, d.ra), en_format(d.value));
     case T::PointOnLine:   return two(_L("On line"));
     case T::PointOnObject: return two(_L("On edge"));
+    case T::EqualRadius:   return two(_L("Equal radius"));
+    case T::Collinear:     return two(_L("Collinear"));
+    case T::DistanceX:     return wxString::Format("%s = %s", two(_L("Horizontal distance")), en_format(d.value));
+    case T::DistanceY:     return wxString::Format("%s = %s", two(_L("Vertical distance")), en_format(d.value));
     }
     return _L("Constraint");
 }
@@ -7931,6 +7964,7 @@ void DesignPanel::delete_constraint(int idx)
         return;
     m_doc.checkpoint();   // undo boundary: deleting a constraint
     feat.entity_constraints.erase(feat.entity_constraints.begin() + idx);
+    sketch_dimensions_erase_constraint(feat.dimensions, idx);   // keep driving dims index-aligned
     // Re-solve the remaining system (deleting a constraint can only free DoF, so it
     // cannot fail for over-constraint; ignore the bool and refresh either way).
     m_doc.solve_sketch_feature(m_constrain_feat);
@@ -9182,7 +9216,8 @@ void DesignPanel::on_edit_feature()
             set_ui_mode(UiMode::Sketch);
             if (m_viewport) {
                 m_viewport->set_display_sketches({});
-                m_viewport->edit_sketch(f.entities, f.entity_constraints, f.plane);
+                m_viewport->edit_sketch(f.entities, f.entity_constraints, f.plane, f.dimensions);
+                m_viewport->view_normal_to_sketch();   // and to one opened for editing
             }
             m_status->SetForegroundColour(wxNullColour);
             set_status(_L("Editing sketch — drag a handle or click a quote to edit"));
@@ -9416,27 +9451,88 @@ void DesignPanel::on_commit()
     if (obj_list == nullptr)
         return;
 
-    // Multi-body: ship each (visible) body as its own plate object so they arrive on the
-    // slicer plate as independent, separately-arrangeable parts (Onshape "Commit all parts").
-    // Hidden bodies are skipped — what you see on the Design plate is what gets committed.
+    // Ship each visible body as its own plate object (Onshape "Commit all parts"). Hidden bodies
+    // are skipped: what you see on the Design plate is what gets sent. A body sent before
+    // updates the object it produced IN PLACE — mesh swapped, while its placement on the bed,
+    // its settings and its name in the object list stay — so a re-send never duplicates.
     sync_body_visible();
     rebuild_disp_meshes();   // ship moved bodies at their Move-gizmo positions
-    if (m_disp_body_meshes.size() > 1) {
-        int committed = 0;
-        for (size_t b = 0; b < m_disp_body_meshes.size(); ++b) {
-            if (b < m_body_visible.size() && !m_body_visible[b]) continue;   // skip hidden
-            if (m_disp_body_meshes[b].its.indices.empty()) continue;
-            obj_list->load_mesh_object(m_disp_body_meshes[b],
-                                       "Design Body " + std::to_string(b + 1));
-            ++committed;
+    Plater* plater = wxGetApp().plater();
+    Model&  model  = plater->model();
+    auto object_index = [&model](ObjectID id) {
+        for (size_t i = 0; i < model.objects.size(); ++i)
+            if (model.objects[i]->id() == id) return int(i);
+        return -1;
+    };
+    std::vector<ObjectID> claimed;   // no two bodies update the same object
+    int added = 0, updated = 0;
+    bool snapshot = false;
+    const size_t n_bodies = m_disp_body_meshes.empty() ? 1 : m_disp_body_meshes.size();
+    for (size_t b = 0; b < n_bodies; ++b) {
+        if (b < m_body_visible.size() && !m_body_visible[b]) continue;
+        const TriangleMesh& mesh = m_disp_body_meshes.empty() ? m_disp_pick_mesh : m_disp_body_meshes[b];
+        if (mesh.its.indices.empty()) continue;
+        const std::string name = b < m_doc.bodies.size() && m_doc.bodies[b].has_user_name && !m_doc.bodies[b].user_name.empty()
+            ? m_doc.bodies[b].user_name
+            : "Part1 - Body" + std::to_string(b + 1);
+        // The object this body produced: remembered by id for this session; in a design loaded
+        // from a project (ids are not persisted) found again by the name it was given.
+        // ponytail: body identity is its index, as for user_name and colour; a body renamed on
+        // the plate AND reloaded from disk is not found, and is added again.
+        int idx = -1;
+        if (auto it = m_sent_objects.find(int(b)); it != m_sent_objects.end())
+            idx = object_index(it->second);
+        if (idx < 0 && m_match_plate_names)
+            for (size_t i = 0; i < model.objects.size(); ++i)
+                if (model.objects[i]->name == name && model.objects[i]->volumes.size() == 1 &&
+                    std::find(claimed.begin(), claimed.end(), model.objects[i]->id()) == claimed.end()) {
+                    idx = int(i);
+                    break;
+                }
+        if (idx >= 0 && std::find(claimed.begin(), claimed.end(), model.objects[idx]->id()) != claimed.end())
+            idx = -1;
+        if (idx < 0) {
+            obj_list->load_mesh_object(mesh, from_u8(name));
+            m_sent_objects[int(b)] = model.objects.back()->id();
+            claimed.push_back(model.objects.back()->id());
+            ++added;
+            continue;
         }
-        if (committed == 0) {   // every body hidden — nothing to ship
-            set_status(_L("All bodies hidden — show one before committing"));
-            return;
-        }
-    } else {
-        obj_list->load_mesh_object(m_disp_pick_mesh, "Design Body");
+        // Same steps as the Simplify gizmo's in-place mesh swap. The volume keeps its
+        // transformation, so the new solid sits where the old one did in CAD coordinates.
+        if (!snapshot) { plater->take_snapshot("Update from CAD"); snapshot = true; }
+        plater->clear_before_change_mesh(idx);   // paint is per-triangle: it cannot follow
+        ModelObject* mo = model.objects[idx];
+        ModelVolume* mv = mo->volumes.front();
+        const bool sinking = mo->min_z() < SINKING_Z_THRESHOLD;
+        // A volume stores its mesh centred on its own box (center_geometry_after_creation) and
+        // remembers that centre in source.mesh_offset. Centre the new mesh the same way and move
+        // the volume by the change of centre, so unchanged CAD geometry stays where it was.
+        TriangleMesh centred = mesh;
+        const Vec3d  c_new   = centred.bounding_box().center();
+        centred.translate(-float(c_new.x()), -float(c_new.y()), -float(c_new.z()));
+        mv->set_offset(mv->get_offset() +
+                       mv->get_matrix_no_offset() * (c_new - mv->source.mesh_offset));
+        mv->source.mesh_offset = c_new;
+        mv->set_mesh(std::move(centred));
+        mv->calculate_convex_hull();
+        mv->invalidate_convex_hull_2d();
+        mv->set_new_unique_id();
+        mo->name = mv->name = name;
+        mo->invalidate_bounding_box();
+        if (!sinking) mo->ensure_on_bed();
+        obj_list->GetModel()->SetName(from_u8(name), obj_list->GetModel()->GetItemById(idx));
+        plater->changed_mesh(idx);
+        obj_list->update_item_error_icon(idx, -1);
+        m_sent_objects[int(b)] = mo->id();
+        claimed.push_back(mo->id());
+        ++updated;
     }
+    if (added + updated == 0) {   // every body hidden — nothing to ship
+        set_status(_L("All bodies hidden — show one before committing"));
+        return;
+    }
+    set_status(wxString::Format(_L("Sent to Plater: %d updated, %d added"), updated, added));
 
     // Persist the editable parametric recipe alongside the committed meshes so the
     // saved 3MF reopens with the full feature tree, not just the baked solid. An empty

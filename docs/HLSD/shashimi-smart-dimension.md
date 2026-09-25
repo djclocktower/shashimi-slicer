@@ -34,7 +34,7 @@ index plus `SketchPointRole`, with the negative implicit references `kSketchRefO
 | `driven` | Reference dimension: measures, owns no constraint. |
 | `constraint` | Index of the driving constraint in the sketch's constraint list, -1 when driven. |
 | `value` | Display units: mm, degrees for angles. For a driving dimension the target, for a driven one the last measurement. |
-| `sector` | Angles only: which of the four angles between two crossing lines (bit0 reverses the first line's direction, bit1 the second's). |
+| `sector` | Angle: which of the four angles between two crossing lines (bit0 reverses the first line's direction, bit1 the second's). `PointPoint` / `PointLine`: bit0 / bit1 measure from the edge of the first / second reference's circle or arc instead of its centre. |
 
 `CadFeature::dimensions` is the last field of the cereal field list. Recipes are length-framed per
 feature (v5+), so a project written before the field ends early and loads with no dimensions; no
@@ -75,6 +75,10 @@ points. With the cursor position the resolver returns the dimension and its meas
 | point + circle/arc, circle/arc + circle/arc | Distance to / between centres, point rule |
 | line + circle/arc | `PointLine` from the centre |
 
+A circle or arc picked with `SmartDimPick::edge` (Shift+click) is measured to its edge: the
+distance is always aligned and equals the centre distance minus the radius (minus both radii edge to
+edge).
+
 A lone point, an ellipse or spline picked whole, or two coincident points resolve to nothing.
 Horizontal/vertical references are ordered so the signed `DistanceX`/`DistanceY` constraint is
 positive for the current geometry: accepting a dimension never flips it.
@@ -85,7 +89,9 @@ positive for the current geometry: accepting a dimension never flips it.
 `Length` -> `Distance(P0,P1)`; `Horizontal`/`Vertical` -> `DistanceX`/`DistanceY`;
 `PointPoint` -> `Distance` (`Coincident` at 0); `Diameter`/`Radius`; `Angle` (radians, see above);
 `PointLine` -> `PointOnLine` with the value; `LineLine` -> `PointOnLine` from the first line's P0 to
-the second line. `PointOnLine` stores an unsigned distance; the solver takes the side from the
+the second line. An edge distance drives the centre distance (`value` plus the radii as they are
+when the constraint is written; re-typing the value re-captures them). `PointOnLine` stores an
+unsigned distance; the solver takes the side from the
 current geometry, so a point is held where it is instead of being flipped across the line.
 
 ## Layout
@@ -99,6 +105,8 @@ annotation keeps its screen size.
 - Linear: the dimension line runs through `text_pos`, parallel to the measured direction. Heads sit
   inside when the span has room (2.5 arrow lengths); otherwise they sit outside pointing in, and
   text placed inside the span is moved past the nearer arrow.
+- An edge reference anchors its extension line at the circle's point facing the other reference
+  (the tangent point for a line).
 - Diameter: a line through the centre toward the text with heads on both rim points pointing out;
   Radius: a leader from the centre with one head on the arc. An arc dimensioned outside its sweep
   gets the arc continued to the head.
@@ -111,7 +119,10 @@ Text is formatted by `format_sketch_dimension`: up to two decimals with trailing
 ## Interaction (`DesignSketchTool`, `Mode::Dimension`)
 
 - Hover pre-selects what a click would take — endpoint, centre, Point, origin, else the edge under
-  the cursor (a midpoint picks its line) — and draws it in the pre-selection orange.
+  the cursor (a midpoint picks its line), else the sketch X / Y axis through the origin — and draws
+  it in the pre-selection orange (an axis as a line across the sketch). The axes are infinite, so a
+  placement click within the pick tolerance of one picks the axis. Shift+click on a circle or arc
+  picks its edge (minimum distance) instead of its centre.
 - The first click holds that pick. From then on a preview dimension follows the cursor, its kind
   and sector re-resolved on every move.
 - A click on another entity or point that the rules can pair with the first switches to the
@@ -124,6 +135,10 @@ Text is formatted by `format_sketch_dimension`: up to two decimals with trailing
   status line reads "Dimension made driven: it would over-define the sketch". A driving dimension
   opens the Modify box pre-filled with the measured value: Enter drives the typed value (a value
   the sketch cannot take is refused and the old one kept), Esc keeps the measured value driving.
+- Nothing opens a value field after a shape is drawn (the draw-then-edit queue is off,
+  `m_autoedit_enabled`): shapes are dimensioned with Smart Dimension. Arming Smart Dimension
+  cancels any open field (keep as drawn) and withdraws a stale tool message; Esc cancels an open
+  field before it unwinds anything else; starting, finishing or cancelling a session closes it.
 - The picks clear and the tool stays armed. Esc drops a held pick first, then leaves the tool;
   right-click drops a held pick.
 - On placed dimensions, in Select and Dimension: click selects the text (selection colour, framed),
@@ -144,6 +159,14 @@ entity vector the panel hands it, restores that feature's dimensions, and after 
 handler has run writes the session's dimensions into the feature it appended or replaced (guarded
 on the entity and constraint counts, so a refused commit is never given another sketch's
 dimensions).
+
+## Committed sketches
+
+A sketch feature that is not being edited is drawn muted gray-blue. The feature picked in the
+viewport, or the one the panel names with `DesignCanvas::set_highlighted_sketch(feature)` (a tree
+selection), also shows its dimensions, read-only, in the same drawing. `DesignCanvas::
+set_display_sketches` attaches each feature's dimensions and full entity list to its
+`DisplaySketch`, since the displayed entities may have consumed loops filtered out.
 
 ## Colours
 

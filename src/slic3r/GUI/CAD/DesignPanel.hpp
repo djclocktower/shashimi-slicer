@@ -10,6 +10,7 @@
 #include <map>
 
 #include "libslic3r/CAD/CadDocument.hpp"
+#include "libslic3r/ObjectID.hpp"
 #include "slic3r/GUI/CAD/DesignInteraction.hpp"   // CadLevel: what one Esc press means
 #include "slic3r/GUI/Lazy.hpp"
 
@@ -132,7 +133,7 @@ private:
     // The ribbon's door onto select_sketch_tool: with no live sketch and no freshly picked plane or
     // face it asks for one first ("Select a plane or planar face to sketch on"), remembering the
     // tool, which then arms itself when the plane is picked (fire_pending_sketch_tool).
-    void ribbon_sketch_tool(int mode, const wxString& hint, bool construction = false, bool view_normal = false);
+    void ribbon_sketch_tool(int mode, const wxString& hint, bool construction = false);
     bool fresh_sketch_target(wxString& what) const;   // a planar face, or a plane picked since the last sketch
     void start_sketch_command();         // ribbon Sketch: prompt for a plane, then open the sketch
     void fire_pending_sketch_tool();
@@ -276,7 +277,6 @@ private:
     int                 m_pending_sketch_mode{-1};
     wxString            m_pending_sketch_hint;
     bool                m_pending_construction{false};
-    bool                m_pending_view_normal{false};
     // A plane or face picked since the last sketch began. The ribbon only sketches without asking
     // on a FRESH pick; m_plane_picked stays set for the offer and key paths, which keep reusing it.
     bool                m_plane_fresh{false};
@@ -913,6 +913,9 @@ private:
     std::vector<Transform3d>  m_body_xform;
     std::vector<TriangleMesh> m_disp_body_meshes;   // display_body_meshes with m_body_xform applied
     TriangleMesh              m_disp_pick_mesh;      // combined pick mesh with m_body_xform applied
+    // Body index -> the plate object Send to Plater made from it, so a re-send updates it.
+    std::map<int, ObjectID>   m_sent_objects;
+    bool                      m_match_plate_names{false};   // design loaded from a project: find its objects by name
     void sync_body_xform();               // grow m_body_xform to bodies.size() (identity)
     void rebuild_disp_meshes();           // recompute m_disp_* from m_doc + m_body_xform
     void feed_bodies();                   // push m_disp_* + visibility/xform to the viewport

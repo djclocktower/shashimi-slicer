@@ -2179,7 +2179,9 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
 
     wxGetApp().plater()->get_mouse3d_controller().render_settings_dialog(*this);
 
-    if (m_canvas_type != ECanvasType::CanvasAssembleView) {
+    // Not in the CAD workspace's canvas (the one with a design sketch tool): Prepare's slicing
+    // notifications do not belong over the Sketch/Modeling viewport.
+    if (m_canvas_type != ECanvasType::CanvasAssembleView && m_design_sketch_tool == nullptr) {
         float right_margin = SLIDER_DEFAULT_RIGHT_MARGIN;
         float bottom_margin = SLIDER_DEFAULT_BOTTOM_MARGIN;
         if (m_canvas_type == ECanvasType::CanvasPreview && m_gcode_viewer.has_data()) { // ORCA only shift position of notifiations when sliders / gcode_viewer exist

@@ -63,6 +63,11 @@ static double ray_segment_dist3(const Vec3d& ro, const Vec3d& rd, const Vec3d& a
     return wxPoint(int(sx + 0.5), int(sy + 0.5));
 }
 
+namespace {
+float draw_sketch_dim_text(const std::string& txt, const wxPoint& sp, float scale, int seq,
+                           const ColorRGBA& text, const ColorRGBA& bg, bool framed);   // defined below
+}
+
 // The kernel's weld tolerance follows the app preference, and it must be pushed at EVERY
 // point that starts a sketch session: a Constrain session never passes through begin(), and
 // it uses region_loops()/connected_loop(), which read the same tolerance. Pushing in one
@@ -75,6 +80,9 @@ static void push_auto_close_pref()
 void DesignSketchTool::begin(const SketchPlane& plane, Mode mode)
 {
     push_auto_close_pref();
+    // A value field left open by whatever ran before (a previous session, a committed-feature
+    // Constrain value) must not survive into this one: its callbacks name state being reset below.
+    if (on_inline_dismiss) on_inline_dismiss();
 
     m_plane = plane;
     m_mode = mode;
@@ -259,7 +267,14 @@ void DesignSketchTool::set_tool(Mode mode)
     // clicking on the canvas did nothing because the canvas was frozen. Committing here accepts
     // the typed value and closes the field, which is the same rule the ready-edit-op above
     // follows — leaving a tool must not silently discard what the user entered.
-    if (on_inline_commit) on_inline_commit();
+    //
+    // Smart Dimension is the exception: arming it means "I am about to dimension", and whatever
+    // field is open was not typed for that. Committing it placed a driving (or, over-defined, a
+    // driven) dimension the user never asked for, so entering Dimension CANCELS the field (keep
+    // as drawn) instead, and drops a stale tool message with it.
+    if (mode == Mode::Dimension) { if (on_inline_dismiss) on_inline_dismiss(); }
+    else if (on_inline_commit)   on_inline_commit();
+    if (on_status_message) on_status_message(std::string());   // clear our last toast, if still up
 
     // Switch the active drawing tool without dropping accumulated entities.
     m_mode = mode;
@@ -392,6 +407,11 @@ bool DesignSketchTool::disarm_tool()
 // cannot be re-opened by adding a route.
 void DesignSketchTool::request_exit()
 {
+    if (m_awaiting_length) {           // an open value field is the innermost level: cancel it
+        if (on_inline_dismiss) on_inline_dismiss();
+        m_awaiting_length = false;
+        return;
+    }
     if (abort_gesture()) return;
     if (disarm_tool())   return;
     if (live_sketch_has_work()) { if (on_exit_refused) on_exit_refused(); return; }
@@ -1156,9 +1176,12 @@ int DesignSketchTool::find_dimension(const SketchDimension& d) const
     for (int i = 0; i < int(m_dimensions.size()); ++i) {
         const SketchDimension& o = m_dimensions[i];
         if (o.kind != d.kind) continue;
-        if (d.kind == K::Angle && o.sector != d.sector) continue;
-        const bool same = o.ea == d.ea && o.eb == d.eb && o.ra == d.ra && o.rb == d.rb;
-        const bool swap = symmetric && o.ea == d.eb && o.eb == d.ea && o.ra == d.rb && o.rb == d.ra;
+        // The sector bits (angle sector, or which circles are measured to their edge) are part of
+        // what is dimensioned; a swapped pair swaps the two edge bits.
+        const int swapped_bits = ((d.sector & 1) << 1) | ((d.sector & 2) >> 1);
+        const bool same = o.ea == d.ea && o.eb == d.eb && o.ra == d.ra && o.rb == d.rb && o.sector == d.sector;
+        const bool swap = symmetric && o.ea == d.eb && o.eb == d.ea && o.ra == d.rb && o.rb == d.ra &&
+                          o.sector == swapped_bits;
         if (d.kind == K::Length || d.kind == K::Diameter || d.kind == K::Radius) {
             if (o.ea == d.ea) return i;
         } else if (same || swap) {
@@ -1387,21 +1410,37 @@ bool DesignSketchTool::smart_pick_at(const Vec2d& p, double tol, SmartDimPick& o
         return true;
     }
     const int hit = hit_test(p, tol);
-    if (hit < 0) return false;
-    switch (m_entities[hit].type) {
-    case SketchEntity::Type::Line:
-    case SketchEntity::Type::Circle:
-    case SketchEntity::Type::Arc:
-        out    = SmartDimPick::whole(hit);
-        marker = p;
-        return true;
-    case SketchEntity::Type::Point:
-        out    = SmartDimPick::at(hit, SketchPointRole::P0);
-        marker = m_entities[hit].p0;
-        return true;
-    default:
-        return false;
+    if (hit >= 0) {
+        switch (m_entities[hit].type) {
+        case SketchEntity::Type::Line:
+        case SketchEntity::Type::Circle:
+        case SketchEntity::Type::Arc:
+            out    = SmartDimPick::whole(hit);
+            marker = p;
+            return true;
+        case SketchEntity::Type::Point:
+            out    = SmartDimPick::at(hit, SketchPointRole::P0);
+            marker = m_entities[hit].p0;
+            return true;
+        default:
+            break;
+        }
     }
+    // The sketch axes through the origin, after every real entity: a line on an axis wins.
+    // ponytail: the axes are infinite, so a placement click within the pick tolerance of one picks
+    // it instead of placing; move off the axis to place (SolidWorks has the same trade).
+    if (std::abs(p.y()) <= tol) { out = SmartDimPick::whole(kSketchRefAxisX); marker = Vec2d(p.x(), 0.0); return true; }
+    if (std::abs(p.x()) <= tol) { out = SmartDimPick::whole(kSketchRefAxisY); marker = Vec2d(0.0, p.y()); return true; }
+    return false;
+}
+
+double DesignSketchTool::sketch_axis_extent(double upp) const
+{
+    double r = 20.0;
+    for (const SketchEntity& e : m_entities)
+        for (const Vec2d& q : { e.p0, e.p1, e.center })
+            r = std::max(r, std::max(std::abs(q.x()), std::abs(q.y())) + e.radius);
+    return 1.2 * r + 40.0 * upp;
 }
 
 // The V path's dimension: the selection names the references, and a text position a little off
@@ -1743,6 +1782,7 @@ static void trace_autoedit(const char* why, size_t n)
 
 void DesignSketchTool::open_primary_autoedit()
 {
+    if (!m_autoedit_enabled) return;
     if (!on_inline_edit) { trace_autoedit("skip: no on_inline_edit host", 0); return; }
     if (m_awaiting_length) { trace_autoedit("skip: a field is already open", 0); return; }
     if (!m_active) { trace_autoedit("skip: session ended before the deferred tick", 0); return; }
@@ -5218,17 +5258,53 @@ void DesignSketchTool::render_base_pick()
         const int  base = (i < m_dbp_base.size()) ? m_dbp_base[i] : -1;
         m.set_color(tint(base, hot));
         m.render();
-
-        // Label near the top-left corner, drawn in the plane (draw_text lifts through m_plane).
-        if (i < m_dbp_labels.size() && !m_dbp_labels[i].empty()) {
-            m_plane = p;
-            const double th = H * 0.10;
-            const ColorRGBA lc = tint(base, true); ColorRGBA lcs(lc.r(), lc.g(), lc.b(), 1.0f);
-            draw_text(m_line_model, m_dbp_labels[i], Vec2d(-H + th * 2.0, H - th * 1.6), th, lcs);
-        }
     }
-    m_plane = saved_plane;   // draw_text renders each label immediately (draw_strokes self-renders)
+    m_plane = saved_plane;
     glsafe(::glDisable(GL_BLEND));
+    // Labels: screen-space chips at base_pick_label_px, which keeps them from overlapping.
+    const std::vector<wxPoint> px = base_pick_label_px();
+    for (size_t i = 0; i < px.size() && i < m_dbp_labels.size(); ++i) {
+        if (m_dbp_labels[i].empty() || (px[i].x < 0 && px[i].y < 0)) continue;
+        const int base = (i < m_dbp_base.size()) ? m_dbp_base[i] : -1;
+        const ColorRGBA lc = tint(base, true);
+        draw_sketch_dim_text(m_dbp_labels[i], px[i], m_render_scale, m_dim_label_seq++,
+                             ColorRGBA(lc.r(), lc.g(), lc.b(), 1.0f), ColorRGBA(1.0f, 1.0f, 1.0f, 0.5f),
+                             int(i) == m_dbp_hover);
+    }
+}
+
+// Each label sits at its plane's FAR corner along the plane's own axes (+u, +v), so Top, Front and
+// Right land on three different corners of the reference box instead of piling up at one; where two
+// still project onto each other the later one steps down by a chip height until it is clear.
+std::vector<wxPoint> DesignSketchTool::base_pick_label_px() const
+{
+    std::vector<wxPoint> out(m_dbp_planes.size(), wxPoint(-1, -1));
+    const Camera& cam = wxGetApp().plater()->get_camera();
+    const double  H   = dbp_half_extent();
+    const double  th  = H * 0.10;
+    const Vec2d   anchor(H - th * 2.0, H - th * 1.6);
+    const double  hh  = 11.0 * double(m_render_scale);
+    std::vector<size_t> placed;
+    for (size_t i = 0; i < m_dbp_planes.size(); ++i) {
+        if (i >= m_dbp_labels.size() || m_dbp_labels[i].empty()) continue;
+        wxPoint sp = world_to_screen_px(cam, m_dbp_planes[i].to_world(anchor));
+        if (sp.x < 0 && sp.y < 0) continue;                    // behind the camera
+        const double hw = (9.0 + 5.0 * double(m_dbp_labels[i].size())) * double(m_render_scale);
+        for (int guard = 0; guard < 8; ++guard) {
+            bool clash = false;
+            for (size_t j : placed) {
+                const double hwj = (9.0 + 5.0 * double(m_dbp_labels[j].size())) * double(m_render_scale);
+                if (std::abs(double(sp.x - out[j].x)) < hw + hwj && std::abs(double(sp.y - out[j].y)) < 2.0 * hh) {
+                    sp.y = out[j].y + int(2.0 * hh + 2.0);
+                    clash = true;
+                }
+            }
+            if (!clash) break;
+        }
+        out[i] = sp;
+        placed.push_back(i);
+    }
+    return out;
 }
 
 // Ray-pick the reference planes: intersect the mouse ray with each plane, keep hits inside the
@@ -5245,13 +5321,11 @@ int DesignSketchTool::hit_test_base_pick(GLCanvas3D& canvas, const wxMouseEvent&
     // "XZ plane selected", because the XZ quad happens to sit in front at that pixel. Nothing
     // about the click was ambiguous to the user; they clicked the word XY.
     // Anchor and text height must track render_base_pick's, which is where they are drawn.
-    const Camera& cam = wxGetApp().plater()->get_camera();
-    const double  th  = H * 0.10;
-    const Vec2d   anchor(-H + th * 2.0, H - th * 1.6);
+    const std::vector<wxPoint> label_px = base_pick_label_px();   // where render_base_pick drew them
     int lbest = -1; double lbest_d = 1e30;
     for (size_t i = 0; i < m_dbp_planes.size(); ++i) {
         if (i >= m_dbp_labels.size() || m_dbp_labels[i].empty()) continue;
-        const wxPoint sp = world_to_screen_px(cam, m_dbp_planes[i].to_world(anchor));
+        const wxPoint sp = label_px[i];
         if (sp.x < 0 && sp.y < 0) continue;                    // behind the camera
         const double dx = std::abs(double(evt.GetX() - sp.x));
         const double dy = std::abs(double(evt.GetY() - sp.y));
@@ -7539,9 +7613,11 @@ float draw_sketch_dim_text(const std::string& txt, const wxPoint& sp, float scal
 }
 } // namespace
 
-// Every placed dimension, plus the live Smart Dimension preview that follows the cursor. Label
-// centres are cached for picking (click / double-click / drag the text).
-void DesignSketchTool::render_smart_dimensions(double upp, bool dark)
+// One dimension set: layouts, arrowheads and SolidWorks text. Driving dimensions in the dimension
+// colour, driven ones grey, the selected / dragged one (interactive sets only) in the selection
+// colour with a framed label.
+void DesignSketchTool::draw_dimension_set(const std::vector<SketchEntity>& ents, std::vector<SketchDimension>& dims,
+                                          double upp, bool dark, std::vector<Vec2d>* label_pos, bool interactive)
 {
     const ColorRGBA c_dim    = dark ? ColorRGBA(0.90f, 0.90f, 0.90f, 1.0f) : ColorRGBA(0.06f, 0.06f, 0.06f, 1.0f);
     const ColorRGBA c_driven = dark ? ColorRGBA(0.62f, 0.62f, 0.64f, 1.0f) : ColorRGBA(0.50f, 0.50f, 0.52f, 1.0f);
@@ -7549,25 +7625,38 @@ void DesignSketchTool::render_smart_dimensions(double upp, bool dark)
     const ColorRGBA c_bg     = dark ? ColorRGBA(0.329f, 0.329f, 0.353f, 0.85f) : ColorRGBA(0.906f, 0.906f, 0.906f, 0.85f);
     const SketchDimStyle st  = dim_style(upp);
     const Camera& cam = wxGetApp().plater()->get_camera();
-
-    m_dim_label_pos.assign(m_dimensions.size(), Vec2d(1e18, 1e18));
-    for (size_t i = 0; i < m_dimensions.size(); ++i) {
-        SketchDimension& d = m_dimensions[i];
-        const SketchDimLayout L = layout_sketch_dimension(m_entities, d, st);
+    if (label_pos) label_pos->assign(dims.size(), Vec2d(1e18, 1e18));
+    for (size_t i = 0; i < dims.size(); ++i) {
+        SketchDimension& d = dims[i];
+        const SketchDimLayout L = layout_sketch_dimension(ents, d, st);
         if (!L.ok) continue;
-        const bool sel = int(i) == m_dim_sel || int(i) == m_dim_drag;
+        const bool sel = interactive && (int(i) == m_dim_sel || int(i) == m_dim_drag);
         const ColorRGBA col = sel ? c_sel : (d.driven ? c_driven : c_dim);
         draw_dim_layout(L, col, upp);
         // A driven dimension shows what the sketch measures; a driving one its target, which is
-        // what the geometry measures whenever the sketch solves.
-        double v = d.value;
-        if (d.driven || m_solve_ok) {
-            if (measure_sketch_dimension(m_entities, d, v) && d.driven) d.value = v;
+        // what the geometry measures whenever the sketch solves (a live sketch that does not
+        // solve shows the target).
+        double v = d.value, m = 0.0;
+        if ((d.driven || !interactive || m_solve_ok) && measure_sketch_dimension(ents, d, m)) {
+            v = m;
+            if (d.driven) d.value = m;
         }
         draw_sketch_dim_text(format_sketch_dimension(d, v), world_to_screen_px(cam, m_plane.to_world(L.text)),
                              m_render_scale, m_dim_label_seq++, col, c_bg, sel);
-        m_dim_label_pos[i] = L.text;
+        if (label_pos) (*label_pos)[i] = L.text;
     }
+}
+
+// Every placed dimension, plus the live Smart Dimension preview that follows the cursor. Label
+// centres are cached for picking (click / double-click / drag the text).
+void DesignSketchTool::render_smart_dimensions(double upp, bool dark)
+{
+    const ColorRGBA c_dim    = dark ? ColorRGBA(0.90f, 0.90f, 0.90f, 1.0f) : ColorRGBA(0.06f, 0.06f, 0.06f, 1.0f);
+    const ColorRGBA c_bg     = dark ? ColorRGBA(0.329f, 0.329f, 0.353f, 0.85f) : ColorRGBA(0.906f, 0.906f, 0.906f, 0.85f);
+    const SketchDimStyle st  = dim_style(upp);
+    const Camera& cam = wxGetApp().plater()->get_camera();
+
+    draw_dimension_set(m_entities, m_dimensions, upp, dark, &m_dim_label_pos, true);
 
     // Live preview: the dimension the next click would place, re-resolved from the cursor.
     if (m_mode == Mode::Dimension && m_sd_first && m_sd_has_cursor && !m_awaiting_length) {
@@ -8979,7 +9068,7 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
     // Draw-then-edit: a creation tool that just committed a new entity/feature (gesture now
     // idle) gets its result auto-selected — so render_live_quotes below computes its quotes —
     // and the primary value editor armed (opened after those quotes exist, see service block).
-    if (m_active && is_creation_autoedit_mode() && m_points.empty() &&
+    if (m_autoedit_enabled && m_active && is_creation_autoedit_mode() && m_points.empty() &&
         m_open_feature < 0 && !m_awaiting_length) {
         const int n = int(m_entities.size());
         if (m_autoedit_seen >= 0 && n > m_autoedit_seen && n > 0) {
@@ -9013,7 +9102,9 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
         // on screen is something you selected.
         const ColorRGBA dface = design_idle_face_color();   // unselected: neutral grey, never the selection colour
         const ColorRGBA sface = design_selection_color(0.34f);   // selected region
-        const ColorRGBA dwire(1.0f, 0.55f, 0.1f, 1.0f);     // normal orange outline
+        // A sketch that is not being edited is drawn muted gray-blue, as SolidWorks draws one.
+        const ColorRGBA dwire = canvas.get_dark_mode_status() ? ColorRGBA(0.62f, 0.70f, 0.82f, 1.0f)
+                                                              : ColorRGBA(0.42f, 0.50f, 0.62f, 1.0f);
         const ColorRGBA swire = design_selection_color();        // selected outline
         glsafe(::glEnable(GL_BLEND));
         glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
@@ -9074,6 +9165,13 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
             }
             if (!sel_point_markers.empty())
                 draw_vertices(m_highlight_model, sel_point_markers, swire);
+            // The picked (or panel-highlighted) feature shows its driving dimensions, read-only.
+            if (!ds.dimensions.empty() && ds.feature >= 0 &&
+                (ds.feature == m_display_pick || ds.feature == m_hl_display_feature)) {
+                std::vector<SketchDimension> dims = ds.dimensions;
+                draw_dimension_set(ds.dim_entities, dims, 1.0 / std::max(camera.get_zoom(), 1e-6),
+                                   canvas.get_dark_mode_status(), nullptr, false);
+            }
         }
         m_plane = saved_plane;
     }
@@ -9276,13 +9374,24 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
         const double mk = std::max(4.5 * upp_dash, 1e-4);
         std::vector<Vec2d> held;
         for (const auto* pk : { &m_sd_first, &m_sd_second })
-            if (*pk && (*pk)->point) {
+            if (*pk && ((*pk)->point || (*pk)->entity == kSketchRefOrigin)) {
                 Vec2d q = Vec2d::Zero();
                 if ((*pk)->entity == kSketchRefOrigin || point_at((*pk)->entity, (*pk)->role, q)) held.push_back(q);
             }
         if (!held.empty()) draw_vertices(m_highlight_model, held, sel_col, mk);
+        auto draw_axis = [&](int e, const ColorRGBA& c) {
+            const double L = sketch_axis_extent(upp_dash);
+            const std::vector<Vec2d> seg = (e == kSketchRefAxisX) ? std::vector<Vec2d>{ Vec2d(-L, 0), Vec2d(L, 0) }
+                                                                  : std::vector<Vec2d>{ Vec2d(0, -L), Vec2d(0, L) };
+            draw_quad_strip(m_highlight_model, seg, false, c, hw_sel);
+        };
+        for (const auto* pk : { &m_sd_first, &m_sd_second })
+            if (*pk && ((*pk)->entity == kSketchRefAxisX || (*pk)->entity == kSketchRefAxisY))
+                draw_axis((*pk)->entity, sel_col);
         if (m_sd_has_hover && !m_awaiting_length) {
-            if (m_sd_hover.point || m_sd_hover.entity == kSketchRefOrigin) {
+            if (m_sd_hover.entity == kSketchRefAxisX || m_sd_hover.entity == kSketchRefAxisY) {
+                draw_axis(m_sd_hover.entity, c_hover);
+            } else if (m_sd_hover.point || m_sd_hover.entity == kSketchRefOrigin) {
                 draw_vertices(m_highlight_model, { m_sd_hover_pt }, c_hover, mk);
             } else if (m_sd_hover.entity >= 0 && m_sd_hover.entity < int(m_entities.size())) {
                 bool closed = false;
@@ -11220,6 +11329,11 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
             SmartDimPick pk;
             Vec2d mk;
             const bool hit = smart_pick_at(p, tol, pk, mk);
+            // Shift on a circle/arc: dimension to its edge (minimum distance), not its centre.
+            if (hit && evt.ShiftDown() && !pk.point && pk.entity >= 0 &&
+                (m_entities[pk.entity].type == SketchEntity::Type::Circle ||
+                 m_entities[pk.entity].type == SketchEntity::Type::Arc))
+                pk.edge = true;
             m_sd_cursor     = p;
             m_sd_has_cursor = true;
             if (!m_sd_first) {
@@ -11292,7 +11406,8 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
                 p = snap_dir(m_points.back(), p, lk);  // lock new segment to inference angle
             }
             m_points.push_back(p);
-            arm_polyline_segment_edit();   // refine this segment's Length+Angle, then continue
+            if (m_autoedit_enabled)
+                arm_polyline_segment_edit();   // refine this segment's Length+Angle, then continue
             return true;
         }
         if (evt.LeftDClick()) {
@@ -11341,11 +11456,9 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
             bool lk = false;
             if (!vsnap) p = snap_dir(m_points.back(), p, lk);  // vertex snap wins over angle
             m_points.push_back(p);      // second click completes the segment
-            // Draw-then-edit: just commit the segment. The generic detect/service path
-            // (is_creation_autoedit_mode now includes Line) auto-selects it and opens its
-            // Length THEN Angle fields in sequence, each over its label — same UX as every
-            // other 2D tool. Enter advances (Length drives a Distance constraint, Angle rotates
-            // about P0); Esc keeps it as drawn.
+            // Commit the segment. With draw-then-edit enabled (m_autoedit_enabled) the generic
+            // detect/service path would then open its Length and Angle fields; by default the
+            // user dimensions it with Smart Dimension, as in SolidWorks.
             keep_segment_as_drawn();
             return true;
         }

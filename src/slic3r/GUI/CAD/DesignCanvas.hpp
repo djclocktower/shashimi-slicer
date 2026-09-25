@@ -227,6 +227,10 @@ public:
     // Persistently draw committed sketches (un-consumed ones stay visible).
     void set_display_sketches(std::vector<DesignSketchTool::DisplaySketch> ds);
     void set_highlight_sketches(std::vector<std::pair<int, ColorRGBA>> hl);
+    // Show the Smart Dimensions of committed sketch feature `feature` (read-only) while it is not
+    // being edited — for a tree selection. -1 clears. A sketch picked in the viewport shows its
+    // dimensions without this.
+    void set_highlighted_sketch(int feature);
     void set_datum_planes(std::vector<SketchPlane> planes,
                            std::vector<Vec2d> sizes = {});     // draw datum/reference planes (u/v extents)
     // Mate connectors, drawn as frames so their verse and polarity are visible (wgsc).
@@ -432,6 +436,7 @@ private:
     wxPopupWindow* m_status_hud{nullptr};
     wxStaticText* m_status_hud_label{nullptr};
     wxString      m_status_hud_last;
+    wxString      m_tool_toast;        // last message from the sketch tool (on_status_message)
     wxColour      m_status_hud_colour;
     void place_status_hud();          // re-anchors to the canvas corner (also on resize)
     void apply_status_label();        // SetLabel + Wrap to the canvas width + Fit, always together

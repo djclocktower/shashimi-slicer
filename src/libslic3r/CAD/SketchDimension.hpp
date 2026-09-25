@@ -51,9 +51,11 @@ struct SketchDimension {
     // with the constraint list (see sketch_dimensions_remap_constraints).
     int             constraint{-1};
     double          value{0.0};       // display units: mm, degrees for Angle
-    // Angle only. The two lines cross at X and cut the plane into four sectors; the dimensioned
-    // one is spanned by the rays X + sa*dir(ea) and X + sb*dir(eb), where dir(e) = p1 - p0
+    // Angle: the two lines cross at X and cut the plane into four sectors; the dimensioned one is
+    // spanned by the rays X + sa*dir(ea) and X + sb*dir(eb), where dir(e) = p1 - p0
     // (sketch_dim_line_ends) and bit0 set means sa = -1, bit1 set means sb = -1.
+    // PointPoint / PointLine: bit0 set measures from the EDGE of ea's circle/arc instead of its
+    // centre, bit1 the same for eb (SolidWorks' min distance). Zero for every other kind.
     int             sector{0};
 
     template<class Archive> void serialize(Archive& ar)
@@ -70,6 +72,7 @@ struct SmartDimPick {
     int             entity{-1};
     bool            point{false};
     SketchPointRole role{SketchPointRole::P0};
+    bool            edge{false};    // a circle/arc picked whole: measure to its edge, not its centre
 
     static SmartDimPick whole(int e) { SmartDimPick p; p.entity = e; return p; }
     static SmartDimPick at(int e, SketchPointRole r) { SmartDimPick p; p.entity = e; p.point = true; p.role = r; return p; }
@@ -97,7 +100,9 @@ struct SmartDimResolution {
 //   point + circle/arc, circle + circle/arc -> distance to / between the centres (point rule).
 //   line + circle/arc -> PointLine distance from the centre.
 // ok == false for anything else (a single point, an ellipse or spline picked whole, a pair that
-// coincides). A second pick equal to the first is treated as absent.
+// coincides). A second pick equal to the first is treated as absent. A circle/arc pick with `edge`
+// set measures point/line/circle distances to its edge (centre distance minus the radius); such a
+// distance is always aligned.
 SmartDimResolution resolve_smart_dimension(const std::vector<SketchEntity>& entities,
                                            const SmartDimPick& first,
                                            const std::optional<SmartDimPick>& second,

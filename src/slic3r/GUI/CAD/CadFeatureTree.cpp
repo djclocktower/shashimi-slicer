@@ -327,6 +327,13 @@ void CadFeatureTree::select(Node n)
     m_tree->SelectItem(id);   // no event when the row is already selected, as with a click
 }
 
+void CadFeatureTree::clear_selection()
+{
+    m_rebuilding = true;
+    m_tree->UnselectAll();
+    m_rebuilding = false;
+}
+
 void CadFeatureTree::edit_label(Node n)
 {
     const wxTreeItemId id = item_of(n);

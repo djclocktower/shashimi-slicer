@@ -34,6 +34,7 @@ wxColour CadTheme::message_bg()      { return dark() ? wxColour(0x4A, 0x46, 0x32
 // Layout constants, in DIP. Every ribbon button reserves the Large icon slot and two label lines,
 // so the whole row shares one baseline however the labels wrap.
 static constexpr int kPad        = 4;
+static constexpr int kPadX       = 2;
 static constexpr int kSlotLarge  = 32;
 static constexpr int kIconNormal = 24;
 static constexpr int kIconSmall  = 18;
@@ -124,9 +125,10 @@ wxSize CadToolButton::DoGetBestClientSize() const
         if (!lines.HasMoreTokens() && !m_menu.empty()) line += " " + kArrow;
         text_w = std::max(text_w, dc.GetTextExtent(line).GetWidth());
     }
-    const int w = std::max(FromDIP(icon_px()), text_w) + FromDIP(2 * kPad + 2);
+    // Tight sides (kPadX): the Sketch page has to fit a 1366 px window without scrolling.
+    const int w = std::max(FromDIP(icon_px()), text_w) + FromDIP(2 * kPadX);
     const int h = label_top() + 2 * line_h + FromDIP(kPad);
-    return wxSize(std::max(w, FromDIP(42)), h);
+    return wxSize(std::max(w, FromDIP(38)), h);
 }
 
 void CadToolButton::on_paint(wxPaintEvent&)
@@ -204,7 +206,9 @@ void CadToolButton::popup_menu()
     int chosen = -1;
     for (size_t i = 0; i < m_menu.size(); ++i) {
         const CadCommand& c  = m_menu[i];
-        auto*             it = new wxMenuItem(&menu, kFirstId + int(i), c.label.IsEmpty() ? c.tip : c.label);
+        wxString          label = c.label.IsEmpty() ? c.tip : c.label;
+        label.Replace("\n", " ");   // a two-line ribbon label is one menu line
+        auto*             it = new wxMenuItem(&menu, kFirstId + int(i), label);
         // Bitmap BEFORE Append: wxGTK builds the image item inside Append (see DesignPanel's
         // append_offer_item for the same trap).
         if (!c.icon.empty())
@@ -326,7 +330,7 @@ void CadRibbon::add_separator(Page page)
 {
     auto* sep = new wxPanel(page_panel(page), wxID_ANY, wxDefaultPosition, wxSize(1, 1));
     sep->SetBackgroundColour(CadTheme::separator());
-    page_sizer(page)->Add(sep, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(5));
+    page_sizer(page)->Add(sep, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(3));
 }
 
 CadToolButton* CadRibbon::add_corner(const std::string& id, const CadCommand& cmd)

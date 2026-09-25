@@ -60,6 +60,7 @@ public:
     int  selected_feature() const;   // -1 unless a feature row is selected
     int  selected_body() const;      // -1 unless a body row is selected
     void select(Node n);             // fires on_selected like a click (none if already selected)
+    void clear_selection();          // silently: the next click on any row reports it
     void edit_label(Node n);         // in-place rename of a feature or body row
 
     // The first sketch `feature` consumes (the one "Edit Sketch" opens), or -1.

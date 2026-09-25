@@ -692,3 +692,49 @@ TEST_CASE("a recipe written before sketch dimensions still loads", "[SketchDimen
     }
 }
 
+
+TEST_CASE("a circle picked by its edge dimensions the minimum distance", "[SketchDimension]")
+{
+    SmartDimPick edge = SmartDimPick::whole(0);
+    edge.edge = true;
+    SECTION("edge to a point, driven through the centre distance") {
+        std::vector<SketchEntity> ents = { circle({0, 0}, 3), point({10, 0.5}) };
+        auto r = pick2(ents, edge, SmartDimPick::whole(1), Vec2d(40, 30));   // outside the band: still aligned
+        REQUIRE(r.ok);
+        CHECK(r.dim.kind == K::PointPoint);
+        CHECK(r.dim.sector == 1);
+        CHECK(r.dim.value == Approx(Vec2d(10, 0.5).norm() - 3.0));
+        auto c = sketch_dimension_constraint(ents, r.dim, 5.0);
+        REQUIRE(c.has_value());
+        CHECK(c->value == Approx(8.0));   // centre distance = gap + radius
+        CHECK(drive(ents, r.dim, 5.0, {con(CT::Fix, 0, R::Center), con(CT::Diameter, 0, R::P0, -1, R::P0, 6.0)})
+              == Approx(5.0).margin(1e-6));
+        SketchDimLayout L = layout_sketch_dimension(ents, r.dim, SketchDimStyle{});
+        REQUIRE(L.ok);
+        // The extension line leaves the circle at its point facing the other reference.
+        const Vec2d tangent = ents[1].p0.normalized() * 3.0;
+        bool from_edge = false;
+        for (const auto& e : L.ext_lines)
+            from_edge = from_edge || (e.first - tangent).norm() <= SketchDimStyle{}.ext_gap + 1e-9;
+        CHECK(from_edge);
+    }
+    SECTION("edge to a line") {
+        std::vector<SketchEntity> ents = { circle({0, 0}, 3), line({-10, 10}, {10, 10}) };
+        auto r = pick2(ents, edge, SmartDimPick::whole(1), Vec2d(5, 5));
+        REQUIRE(r.ok);
+        CHECK(r.dim.kind == K::PointLine);
+        CHECK(r.dim.value == Approx(7.0));
+        CHECK(drive(ents, r.dim, 4.0, {con(CT::Fix, 1, R::P0), con(CT::Fix, 1, R::P1),
+                                       con(CT::Diameter, 0, R::P0, -1, R::P0, 6.0)}) == Approx(4.0).margin(1e-6));
+        CHECK(ents[0].center.y() == Approx(3.0).margin(1e-6));
+    }
+    SECTION("edge to edge") {
+        std::vector<SketchEntity> ents = { circle({0, 0}, 3), circle({20, 0}, 2) };
+        SmartDimPick edge2 = SmartDimPick::whole(1);
+        edge2.edge = true;
+        auto r = pick2(ents, edge, edge2, Vec2d(10, 5));
+        REQUIRE(r.ok);
+        CHECK(r.dim.sector == 3);
+        CHECK(r.dim.value == Approx(15.0));
+    }
+}

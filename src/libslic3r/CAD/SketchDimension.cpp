@@ -61,10 +61,28 @@ bool round_of(const std::vector<SketchEntity>& ents, int e, Vec2d& c, double& r)
 // What a pick is, geometrically.
 enum class G { None, Point, Line, Round };
 struct Geo {
-    G   g{G::None};
-    int e{-1};
-    R   role{R::P0};
+    G    g{G::None};
+    int  e{-1};
+    R    role{R::P0};
+    bool edge{false};   // Round measured to its edge
 };
+
+// Radius of the circle/arc reference (e, Center), or 0 when it is not one.
+double round_radius(const std::vector<SketchEntity>& ents, int e, R r)
+{
+    Vec2d c; double rad = 0.0;
+    return (r == R::Center && round_of(ents, e, c, rad)) ? rad : 0.0;
+}
+
+// How much of a centre distance the edge flags of `d` take off (PointPoint / PointLine only).
+double edge_offset(const std::vector<SketchEntity>& ents, const SketchDimension& d)
+{
+    if (d.kind != SketchDimKind::PointPoint && d.kind != SketchDimKind::PointLine) return 0.0;
+    double off = 0.0;
+    if (d.sector & 1) off += round_radius(ents, d.ea, d.ra);
+    if ((d.sector & 2) && d.kind == SketchDimKind::PointPoint) off += round_radius(ents, d.eb, d.rb);
+    return off;
+}
 
 Geo classify(const std::vector<SketchEntity>& ents, const SmartDimPick& p)
 {
@@ -87,7 +105,7 @@ Geo classify(const std::vector<SketchEntity>& ents, const SmartDimPick& p)
     switch (s.type) {
     case ET::Line:   g.g = G::Line;  break;
     case ET::Circle:
-    case ET::Arc:    g.g = G::Round; break;
+    case ET::Arc:    g.g = G::Round; g.edge = p.edge; break;
     default:         break;   // an ellipse or a spline picked whole has no single quantity
     }
     return g;
@@ -320,6 +338,7 @@ SmartDimResolution resolve_smart_dimension(const std::vector<SketchEntity>& ents
         d.kind = K::PointLine;
         d.ea = pe; d.ra = pr;
         d.eb = gl.e;
+        if (gp.g == G::Round && gp.edge) d.sector = 1;
         return finish();
     }
 
@@ -330,6 +349,14 @@ SmartDimResolution resolve_smart_dimension(const std::vector<SketchEntity>& ents
     if (!point_of(ents, e1, r1, P) || !point_of(ents, e2, r2, Q)) return res;
     d.ea = e1; d.ra = r1;
     d.eb = e2; d.rb = r2;
+    const bool edge1 = ga.g == G::Round && ga.edge, edge2 = gb.g == G::Round && gb.edge;
+    if (edge1 || edge2) {
+        // To a circle's edge: always the aligned (minimum) distance.
+        if ((Q - P).norm() < kEps) return res;
+        d.kind   = K::PointPoint;
+        d.sector = (edge1 ? 1 : 0) | (edge2 ? 2 : 0);
+        return finish();
+    }
     if (!resolve_linear(P, Q, cursor, false, d)) return res;
     return finish();
 }
@@ -351,7 +378,7 @@ bool measure_sketch_dimension(const std::vector<SketchEntity>& ents, const Sketc
         if (!point_of(ents, d.ea, d.ra, P) || !point_of(ents, d.eb, d.rb, Q)) return false;
         value = (d.kind == K::Horizontal) ? std::abs(Q.x() - P.x())
               : (d.kind == K::Vertical)   ? std::abs(Q.y() - P.y())
-                                          : (Q - P).norm();
+                                          : (Q - P).norm() - edge_offset(ents, d);
         return true;
     }
     case K::Diameter:
@@ -374,7 +401,7 @@ bool measure_sketch_dimension(const std::vector<SketchEntity>& ents, const Sketc
     case K::PointLine: {
         Vec2d P, a, b;
         if (!point_of(ents, d.ea, d.ra, P) || !sketch_dim_line_ends(ents, d.eb, a, b)) return false;
-        value = std::abs(cross2((b - a).normalized(), P - a));
+        value = std::abs(cross2((b - a).normalized(), P - a)) - edge_offset(ents, d);
         return true;
     }
     case K::LineLine: {
@@ -425,8 +452,12 @@ std::optional<SketchEntityConstraintDef> sketch_dimension_constraint(
     case K::PointPoint: {
         Vec2d P, Q;
         if (!point_of(ents, d.ea, d.ra, P) || !point_of(ents, d.eb, d.rb, Q)) return std::nullopt;
-        c.type = (value < kEps) ? CT::Coincident : CT::Distance;
-        if (value < kEps) c.value = 0.0;
+        // An edge distance drives the centre distance: value + the radii as they are now.
+        // ponytail: the radius is captured, not tied; after a radius change, re-typing the value
+        // re-captures it (a tied version needs an auxiliary point on the circle).
+        c.value = value + edge_offset(ents, d);
+        c.type  = (c.value < kEps) ? CT::Coincident : CT::Distance;
+        if (c.value < kEps) c.value = 0.0;
         c.ea = d.ea; c.ra = d.ra;
         c.eb = d.eb; c.rb = d.rb;
         return c;
@@ -453,7 +484,8 @@ std::optional<SketchEntityConstraintDef> sketch_dimension_constraint(
     case K::PointLine: {
         Vec2d P, a, b;
         if (!point_of(ents, d.ea, d.ra, P) || !sketch_dim_line_ends(ents, d.eb, a, b)) return std::nullopt;
-        c.type = CT::PointOnLine;
+        c.type  = CT::PointOnLine;
+        c.value = value + edge_offset(ents, d);   // an edge distance holds the centre off by +r
         c.ea = d.ea; c.ra = d.ra;
         c.eb = d.eb;
         return c;
@@ -505,6 +537,10 @@ SketchDimLayout layout_sketch_dimension(const std::vector<SketchEntity>& ents,
             if ((Q - P).norm() < kEps) return L;
             u = (Q - P).normalized();
         }
+        if (d.kind == K::PointPoint) {   // edge references: anchor on the circles' facing points
+            if (d.sector & 1) P += u * round_radius(ents, d.ea, d.ra);
+            if (d.sector & 2) Q -= u * round_radius(ents, d.eb, d.rb);
+        }
         const Vec2d n = perp(u);
         const Vec2d A = P + n * (T - P).dot(n);
         const Vec2d B = Q + n * (T - Q).dot(n);
@@ -518,6 +554,8 @@ SketchDimLayout layout_sketch_dimension(const std::vector<SketchEntity>& ents,
         if (!point_of(ents, d.ea, d.ra, P) || !sketch_dim_line_ends(ents, d.eb, a, b)) return L;
         const Vec2d w = (b - a).normalized();
         const Vec2d F = a + w * (P - a).dot(w);            // foot of P on the line
+        if ((d.sector & 1) && (P - F).norm() > kEps)       // edge: the circle's point nearest the line
+            P -= (P - F).normalized() * round_radius(ents, d.ea, d.ra);
         const Vec2d A = F + w * (T - F).dot(w);            // dimension line runs across the line,
         const Vec2d B = P + w * (T - P).dot(w);            // through the text
         ext_from_segment(L, d.eb, a, b, A, st);

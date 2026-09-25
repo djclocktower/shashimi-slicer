@@ -153,8 +153,20 @@ public:
     // Persistent committed sketches to draw even when no session is active (e.g. an
     // un-consumed sketch left visible after its extrude is removed). Each carries its
     // own plane. render() draws these as translucent faces + outlines.
-    struct DisplaySketch { std::vector<SketchEntity> entities; SketchPlane plane; int feature{-1}; };
+    // dim_entities / dimensions: the feature's FULL entity list and its Smart Dimensions, filled by
+    // DesignCanvas from the document. `entities` may be a filtered subset (consumed loops hidden),
+    // so the dimensions are laid out against dim_entities, which their indices refer to.
+    struct DisplaySketch {
+        std::vector<SketchEntity>    entities;
+        SketchPlane                  plane;
+        int                          feature{-1};
+        std::vector<SketchEntity>    dim_entities;
+        std::vector<SketchDimension> dimensions;
+    };
     void set_display_sketches(std::vector<DisplaySketch> ds) { m_display_sketches = std::move(ds); }
+    // The committed sketch feature whose dimensions are drawn (read-only) while no session edits
+    // it, besides the one picked in the viewport (m_display_pick). -1 = none.
+    void set_highlighted_sketch(int feature) { m_hl_display_feature = feature; }
     void set_highlight_sketches(std::vector<std::pair<int, ColorRGBA>> hl) { m_hl_sketches = std::move(hl); }
     // Solid pick is resolved on LeftUp (see on_mouse): consuming the press broke orbit/pan.
     int  m_pick_press_x = 0;
@@ -554,6 +566,7 @@ public:
     void close_session_chrome() {
         if (on_inline_dismiss) on_inline_dismiss();   // no-op when no field is open
         reset_autoedit();
+        if (on_status_message) on_status_message(std::string());   // withdraw a stale tool message
         if (on_readout) on_readout(std::string());    // the HUD is not redrawn once the tool stops
     }
     // Ctrl+Z while sketching: drop the last drawn entity (reuses delete_selected's remap).
@@ -805,6 +818,15 @@ private:
     bool entity_has_dimension(int ei, DimType kind) const;
     SketchDimStyle dim_style(double unit_per_px) const;
     void render_smart_dimensions(double unit_per_px, bool dark);
+    // Draw a dimension set against `ents` on the current m_plane. `label_pos` (optional) receives
+    // each label centre; `interactive` draws selection/drag state.
+    void draw_dimension_set(const std::vector<SketchEntity>& ents, std::vector<SketchDimension>& dims,
+                            double unit_per_px, bool dark, std::vector<Vec2d>* label_pos, bool interactive);
+    // Screen positions of the base-pick plane labels: at each plane's far corner along its own
+    // axes, nudged apart where two would overlap. Shared by render and hit test. (-1,-1) = none.
+    std::vector<wxPoint> base_pick_label_px() const;
+    // Half-length of the sketch axes drawn when picked/hovered (covers the sketch, plane units).
+    double sketch_axis_extent(double unit_per_px) const;
     void draw_dim_layout(const SketchDimLayout& L, const ColorRGBA& col, double unit_per_px);
     void draw_triangles(GLModel& model, const std::vector<std::array<Vec2d, 3>>& tris, const ColorRGBA& color);
     void clear_smart_dim_picks();
@@ -1029,6 +1051,11 @@ private:
     bool                m_awaiting_length{false}; // inline value editor open -> freeze canvas
     int                 m_autoedit_seen{-1};      // entity count baseline for draw-then-edit
     bool                m_autoedit_pending{false};// a new entity just committed -> open editor
+    // Draw-then-edit: after a shape is finished, open its dimensions' value fields one after
+    // another (and per polyline segment). OFF: SolidWorks opens nothing after drawing — the user
+    // dimensions with Smart Dimension — and a field left open under the next shortcut swallowed
+    // it (D typed into a Length field and placed a dimension nobody asked for).
+    bool                m_autoedit_enabled{false};
     // Draw-then-edit step queue: every characteristic dimension of the freshly-drawn shape
     // (scalar quote OR geometric editor) becomes one step, opened in sequence over its label.
     struct AutoEditStep {
@@ -1203,6 +1230,7 @@ private:
     std::vector<DisplaySketch> m_display_sketches;  // committed sketches drawn persistently
     std::vector<std::pair<int, ColorRGBA>> m_hl_sketches;  // feature index -> outline colour (Sweep/Loft operands)
     int m_display_pick{-1};        // FEATURE index of the click-selected display sketch (-1 none)
+    int m_hl_display_feature{-1};  // feature whose dimensions are shown (set_highlighted_sketch)
 
     // Solid (whole/face/edge) selection on the committed bodies. Pointers are non-owning,
     // into CadDocument (bodies + display_mesh + per-triangle face/body ids), refreshed each

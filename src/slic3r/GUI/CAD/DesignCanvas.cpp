@@ -105,8 +105,17 @@ DesignCanvas::DesignCanvas(wxWindow* parent)
         if (m_canvas) m_canvas->set_as_dirty();
         if (m_canvas_widget) m_canvas_widget->Refresh();
     };
+    // Tool messages ("made driven"). An empty message withdraws the last one — only if it is
+    // still the text on screen, so the panel's own status is never wiped.
     m_sketch_tool.on_status_message = [this](const std::string& msg) {
-        set_status_text(wxString::FromUTF8(msg), wxColour(240, 180, 80));
+        if (msg.empty()) {
+            if (!m_tool_toast.IsEmpty() && m_status_hud_last == m_tool_toast)
+                set_status_text(wxString(), m_status_hud_colour);
+            m_tool_toast.clear();
+            return;
+        }
+        m_tool_toast = wxString::FromUTF8(msg);
+        set_status_text(m_tool_toast, wxColour(240, 180, 80));
     };
 
     // Onshape-style in-canvas value editor, floating over the GL canvas. The tool hands
@@ -1171,6 +1180,18 @@ void DesignCanvas::set_on_undo_redo(std::function<void(bool)> cb)
 
 void DesignCanvas::set_display_sketches(std::vector<DesignSketchTool::DisplaySketch> ds)
 {
+    // Attach each feature's Smart Dimensions (and the full entity list their indices refer to:
+    // ds.entities may have consumed loops filtered out), so a picked committed sketch can show them.
+    if (DesignPanel* panel = DesignPanel::if_built()) {
+        const CadDocument& doc = panel->mcp_doc();
+        for (DesignSketchTool::DisplaySketch& d : ds)
+            if (d.feature >= 0 && d.feature < int(doc.features.size()) &&
+                doc.features[d.feature].type == CadFeatureType::Sketch &&
+                !doc.features[d.feature].dimensions.empty()) {
+                d.dim_entities = doc.features[d.feature].entities;
+                d.dimensions   = doc.features[d.feature].dimensions;
+            }
+    }
     m_sketch_tool.set_display_sketches(std::move(ds));
     // Overlay changed programmatically (no mouse event) — force a repaint.
     request_repaint();
@@ -1376,6 +1397,12 @@ void DesignCanvas::set_operand_bodies(int target_body, int tool_body)
     m_hl_body_target = target_body;
     m_hl_body_tool   = tool_body;
     reload(true);      // recolours the body volumes (same idiom set_body_highlight uses)
+}
+
+void DesignCanvas::set_highlighted_sketch(int feature)
+{
+    m_sketch_tool.set_highlighted_sketch(feature);
+    request_repaint();
 }
 
 void DesignCanvas::set_highlight_sketches(std::vector<std::pair<int, ColorRGBA>> hl)

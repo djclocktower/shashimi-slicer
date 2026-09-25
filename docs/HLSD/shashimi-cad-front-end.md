@@ -82,14 +82,12 @@ the ribbon").
 | Polygon ▾ (sides 3–12, inscribed/circumscribed) | `push_polygon_params()` + `Mode::Polygon` |
 | Ellipse ▾ (Ellipse, Partial Ellipse) | `Ellipse`, `EllipseArc` |
 | Spline, Point | `BSpline`, `Point` |
-| Trim / Extend / Offset / Mirror Entities, Sketch Fillet / Chamfer | `Trim`, `Extend`, `Offset`, `Mirror`, `Fillet`, `Chamfer` |
-| Linear / Circular Sketch Pattern, Move / Rotate / Scale Entities | `Array`, `PolarArray`, `Move`, `Rotate`, `Scale` |
+| Trim, Extend, Offset, Mirror, Fillet, Chamfer | `Trim`, `Extend`, `Offset`, `Mirror`, `Fillet`, `Chamfer` |
+| Linear Pat., Circ. Pat., Move, Rotate, Scale | `Array`, `PolarArray`, `Move`, `Rotate`, `Scale` |
 | Add Relation ▾ (20 relation types) | `apply_constraint(type)` |
-| Display/Delete Relations | Inside a sketch: `rebuild_constraint_list()` and open the Relations group. Outside: offer verb `btn:constrain` |
-| Sketch Text ▾ (Text, Import SVG) | offer verbs `btn:text`, `btn:svg` |
-| Normal To | sketch key `N` |
-| For Construction (toggle) | Q's behaviour: converts the selection in Select mode, otherwise `set_construction()` arms construction for what is drawn next; checked while armed |
-| mode label (tail) | "Sketch" outside a sketch, the sketch's name inside one, "Relations" in Constrain (`update_ribbon_state`) |
+| Relations (Display/Delete Relations) | Inside a sketch: `rebuild_constraint_list()` and open the Relations group. Outside: offer verb `btn:constrain` |
+| More ▾ (Sketch Text, Import SVG, Normal To, For Construction) | offer verbs `btn:text`, `btn:svg`; sketch key `N`; For Construction is Q's behaviour: converts the selection in Select mode, otherwise `set_construction()` arms construction for what is drawn next |
+| mode label (tail) | "Sketch" outside a sketch, the sketch's name inside one (with "· Construction" while construction is armed), "Relations" in Constrain (`update_ribbon_state`) |
 
 Features page. If a sketch is open, each command that changes the model first leaves the sketch
 through `tool_confirm()`, which keeps it (`run_feature_command`). The view toggles, Evaluate and
@@ -110,14 +108,16 @@ Appearance do not.
 | Reference Geometry ▾ (Plane, Axis, Coordinate System, Helix/Spiral, Project Edges) | `fly:plane#0..4` |
 | Combine ▾ (Combine, Subtract, Common, Split) | `btn:bool#0..2`; Split = feature key Shift+X |
 | Surfaces ▾ (Extruded, Revolved, Lofted, Filled, Offset, Thicken) | `fly:surface#0..5` |
-| Move/Copy Bodies ▾ (Move/Copy Body, Move Body (drag), Mate, Appearance) | `fly:placement#0`, `on_move_body()`, `fly:placement#2`, `btn:colour` |
+| Move/Copy Bodies ▾ (Move/Copy Body, Move Body (drag), Place on Face, Mate, Appearance) | `fly:placement#0`, `on_move_body()`, `place_on_face()`, `fly:placement#2`, `btn:colour` |
 | Sketch | `start_sketch_command()` (asks for a plane, then switches to the Sketch tab) |
 | Import ▾ (STEP, Mesh) | `on_import_step()` / `on_import_mesh()` |
 | Section View (toggle) / Flip Section | `toggle_section_view()` / `flip_section_view()` |
-| Place on Face | `place_on_face()` |
 | Evaluate ▾ (Mass Properties, Interference Detection, Export STEP) | `btn:mass`, `on_check_interference()`, `on_export_step()` |
 | Show Bed (toggle) | feature key Ctrl+Shift+B |
-| Send to Plater (large, tail) | `on_commit()` |
+| Send to Plater (large, tail) | `on_commit()` (see "Send to Plater") |
+
+Both pages are sized to fit a 1366 px window without scrolling: short labels, tight button
+sides, and the rarely used commands under More.
 
 Commands that need a body are greyed, with a tooltip saying why, until the document has one
 (`m_body_gates`, re-checked in `feed_bodies`).
@@ -134,8 +134,10 @@ viewport, or Front/Top/Right Plane or a datum plane in the tree) goes through
 `pick_reference_plane()`. Clicking a planar face goes through the solid-pick handler. Both then
 call `fire_pending_sketch_tool()`, which arms the stored tool and so starts the sketch on that
 plane. While the tool waits, the left pane shows the FeatureManager so its planes can be picked,
-and the sketch's PropertyManager comes back when the sketch starts. Esc cancels the prompt. The Sketch command is the same path with `Mode::Select`, and it
-turns the view normal to the new sketch.
+and the sketch's PropertyManager comes back when the sketch starts. While it waits, the banner says "Select a plane or planar face for Sketch1" and the mode
+label "Select a plane". Esc cancels the prompt. The Sketch command is the same path with
+`Mode::Select`. Every new sketch, and every sketch opened for editing, turns the view normal to
+its plane once (`select_sketch_tool`, `on_edit_feature`); switching tabs does not.
 
 The keyboard and the offer menu keep their behaviour: they reuse the last chosen plane
 (`m_plane_picked`) without asking.
@@ -161,7 +163,8 @@ rebuild keeps the selected row and the expanded rows, and it fires no selection 
 
 The tree only reports what the user points at. The panel decides what that means:
 
-- Selecting a feature highlights the solid. Selecting a body selects it in the viewport as the
+- Selecting a sketch shows its dimensions (`set_highlighted_sketch`); any other row clears
+  them. Selecting another feature highlights the solid. Selecting a body selects it in the viewport as the
   target of the next command. Selecting Front/Top/Right Plane or a datum plane picks it as the
   sketch plane.
 - Double-clicking a feature edits it (`on_edit_feature`).
@@ -213,6 +216,20 @@ onto `ExtrudeEnd`, `BooleanMode` and `taper_deg`. Fillet/Chamfer has Type, Items
 picked edge, or an edge group) and Parameters. The sketch environment's PropertyManager shows the
 Sketch Plane group and the Relations group (the constraint list). Constrain mode shows the
 Display/Delete Relations PropertyManager.
+
+### Send to Plater
+
+`on_commit()` ships each visible body as its own plate object, named after the body (its
+`user_name`, else "Part1 - Body N"). A body that was sent before updates its object in place,
+so sending again never duplicates: the object's mesh is swapped the way the Simplify gizmo does
+it (`set_mesh`, new volume id, `Plater::changed_mesh`), and its placement on the bed, its
+settings and its instances stay. The new mesh is centred on its own box like any new volume, and the
+volume moves by the change of centre (`source.mesh_offset`), so geometry that did not change
+in CAD does not move on the plate. Painting is cleared, since it is per-triangle. The panel
+remembers body index → `ObjectID` in `m_sent_objects` for the session. A design loaded from a
+project finds its objects again by name, because object ids are not saved; a New Design forgets
+both, so it never overwrites the previous design's objects. Objects whose body no longer exists
+are left alone.
 
 ### Status bar
 
