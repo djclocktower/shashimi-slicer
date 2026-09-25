@@ -2308,6 +2308,35 @@ TEST_CASE("a truncated feature keeps what it could read", "[CadDocument][recipe]
     REQUIRE(loaded.features[2].name == doc.features[2].name);
 }
 
+TEST_CASE("an import feature framed before dimensions keeps its solid", "[CadDocument][recipe]")
+{
+    // A v5/v6 feature blob written before `dimensions` was appended ends right before it; the
+    // read of the missing field throws, and the Import solid must already be restored by then.
+    CadFeature f;
+    f.type           = CadFeatureType::Import;
+    f.imported_solid = BRepPrimAPI_MakeBox(10., 10., 10.).Shape();
+    std::string buf;
+    {
+        std::ostringstream os;
+        cereal::BinaryOutputArchive oa(os);
+        oa(f);
+        buf = os.str();
+    }
+    REQUIRE(buf.size() > sizeof(uint64_t));
+    buf.resize(buf.size() - sizeof(uint64_t));   // drop the empty dimensions vector (its size)
+
+    CadFeature g;
+    try {
+        std::istringstream is(buf);
+        cereal::BinaryInputArchive ia(is);
+        ia(g);
+    } catch (...) {
+        // expected: the blob ends before `dimensions`
+    }
+    REQUIRE(g.type == CadFeatureType::Import);
+    REQUIRE_FALSE(g.imported_solid.IsNull());
+}
+
 TEST_CASE("a v3 recipe is refused with a message naming the version", "[CadDocument][recipe]")
 {
     // Honesty guard: the framing fixes the future, not the past. A v3 field list no longer

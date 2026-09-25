@@ -36,11 +36,21 @@ index plus `SketchPointRole`, with the negative implicit references `kSketchRefO
 | `value` | Display units: mm, degrees for angles. For a driving dimension the target, for a driven one the last measurement. |
 | `sector` | Angle: which of the four angles between two crossing lines (bit0 reverses the first line's direction, bit1 the second's). `PointPoint` / `PointLine`: bit0 / bit1 measure from the edge of the first / second reference's circle or arc instead of its centre. |
 
-`CadFeature::dimensions` is the last field of the cereal field list. Recipes are length-framed per
-feature (v5+), so a project written before the field ends early and loads with no dimensions; no
-version bump is involved. The unframed v4 layout is read inside `CadRecipeV4Scope`, which stops
-`CadFeature::load` at the fields v4 had — anything appended after the framing is read only from
-framed blobs, which is what keeps appending safe.
+`CadFeature::dimensions` is the last field of the cereal field list, written as ONE opaque byte
+block (a cereal string, so it is length-framed inside the feature):
+
+```
+u32 block version | u32 item count | { u32 item byte length | item payload } * count
+```
+
+The item payload is `SketchDimension::serialize`, append-only. `sketch_dimensions_decode` consumes
+exactly each item's byte length, so a newer build's appended fields are skipped by an older reader,
+and an older build's shorter item keeps its read fields and defaults the rest. No dimensions encode
+as an empty block. A project written before the field existed ends early and loads with no
+dimensions (recipes are length-framed per feature from v5; no version bump). The unframed v4
+layout is read inside `CadRecipeV4Scope`, which stops `CadFeature::load` at the fields v4 had —
+anything appended after the framing is read only from framed blobs. An Import feature's solid is
+restored before the appended fields are read, so a blob ending early still restores it.
 
 ### Keeping references valid
 

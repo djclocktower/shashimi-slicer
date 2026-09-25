@@ -1,8 +1,12 @@
 #include "libslic3r/CAD/SketchDimension.hpp"
 
+#include <cereal/archives/binary.hpp>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <sstream>
 
 namespace Slic3r {
 
@@ -719,6 +723,64 @@ void sketch_dimensions_sanitize(std::vector<SketchDimension>& dims, int n_entiti
         kept.push_back(d);
     }
     dims.swap(kept);
+}
+
+static constexpr uint32_t kDimBlockVersion = 1;
+
+std::string sketch_dimensions_encode(const std::vector<SketchDimension>& dims)
+{
+    if (dims.empty()) return {};
+    std::ostringstream os;
+    {
+        cereal::BinaryOutputArchive ar(os);
+        const uint32_t version = kDimBlockVersion, count = uint32_t(dims.size());
+        ar(version, count);
+        for (const SketchDimension& d : dims) {
+            std::ostringstream is;
+            {
+                cereal::BinaryOutputArchive ia(is);
+                ia(const_cast<SketchDimension&>(d));
+            }
+            const std::string item = is.str();
+            const uint32_t len = uint32_t(item.size());
+            ar(len);
+            ar(cereal::binary_data(item.data(), item.size()));
+        }
+    }
+    return os.str();
+}
+
+bool sketch_dimensions_decode(const std::string& block, std::vector<SketchDimension>& dims)
+{
+    dims.clear();
+    if (block.empty()) return true;
+    try {
+        std::istringstream in(block);
+        cereal::BinaryInputArchive ar(in);
+        uint32_t version = 0, count = 0;
+        ar(version, count);
+        // A newer block version only ever appends item fields: read on regardless.
+        if (count > (block.size() / sizeof(uint32_t))) return false;   // corrupt count
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t len = 0;
+            ar(len);
+            std::string item(len, '\0');
+            if (len > 0) ar(cereal::binary_data(&item[0], len));   // consume exactly len bytes
+            SketchDimension d;
+            try {
+                std::istringstream is(item);
+                cereal::BinaryInputArchive ia(is);
+                ia(d);            // stops at the fields this build knows; trailing bytes are skipped
+            } catch (...) {
+                // An item from an older build ends early: what was read is kept, the rest defaults.
+            }
+            dims.push_back(d);
+        }
+    } catch (...) {
+        // Truncated block: keep the complete items.
+        return false;
+    }
+    return true;
 }
 
 } // namespace Slic3r

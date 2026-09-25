@@ -58,9 +58,10 @@ struct SketchDimension {
     // centre, bit1 the same for eb (SolidWorks' min distance). Zero for every other kind.
     int             sector{0};
 
+    // One item's payload inside the framed block (sketch_dimensions_encode). Append-only: each
+    // item is length-framed there, so a reader stops at the fields it knows and skips the rest.
     template<class Archive> void serialize(Archive& ar)
     {
-        // Append-only.
         ar(kind, ea, eb, ra, rb, text_pos, driven, constraint, value, sector);
     }
 };
@@ -154,6 +155,18 @@ struct SketchDimLayout {
 // Every stroke of the annotation, from the solved geometry and dim.text_pos.
 SketchDimLayout layout_sketch_dimension(const std::vector<SketchEntity>& entities,
                                         const SketchDimension& dim, const SketchDimStyle& style);
+
+// ---- Persistence ------------------------------------------------------------------------------
+// CadFeature stores its dimensions as ONE opaque byte block (a cereal string, so it is length-
+// framed in the feature stream). Inside: u32 block version, u32 item count, then per item a u32
+// byte length followed by that item's cereal payload (SketchDimension::serialize). A reader reads
+// the fields it knows from each item and skips any trailing bytes a newer build appended; an item
+// shorter than this build's field list keeps its defaults for the missing fields. No dimensions
+// encode as an empty block.
+std::string sketch_dimensions_encode(const std::vector<SketchDimension>& dims);
+// False (and `dims` empty) when the block is not readable at all; an unknown newer block version
+// is still read item by item.
+bool        sketch_dimensions_decode(const std::string& block, std::vector<SketchDimension>& dims);
 
 // ---- Re-indexing, mirroring what the sketch does to its constraint list ----------------------
 // Entities: old index -> new index, or -1 when deleted. A dimension referencing a deleted

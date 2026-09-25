@@ -1304,7 +1304,9 @@ std::string string_printf(const char *format, ...)
 
 std::string header_slic3r_generated()
 {
-	return std::string(SLIC3R_APP_NAME " " SoftFever_VERSION);
+	// "OrcaSlicer" stays the first token so Moonraker/Klipper metadata parsers and
+	// GCodeProcessor/Config producer detection keep recognising the G-code.
+	return std::string("OrcaSlicer " SoftFever_VERSION " (" SLIC3R_APP_FULL_NAME ")");
 }
 
 std::string header_gcodeviewer_generated()

@@ -5,10 +5,13 @@ using Catch::Approx;
 #include "libslic3r/CAD/SketchSolver.hpp"
 #include "libslic3r/CAD/CadDocument.hpp"
 
+#include <cereal/archives/binary.hpp>
+
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 
 using namespace Slic3r;
 using K  = SketchDimKind;
@@ -736,5 +739,82 @@ TEST_CASE("a circle picked by its edge dimensions the minimum distance", "[Sketc
         REQUIRE(r.ok);
         CHECK(r.dim.sector == 3);
         CHECK(r.dim.value == Approx(15.0));
+    }
+}
+
+TEST_CASE("the dimensions block frames every item so later fields can be appended", "[SketchDimension]")
+{
+    std::vector<SketchDimension> dims(2);
+    dims[0].kind = K::Angle; dims[0].ea = 3; dims[0].eb = kSketchRefAxisX; dims[0].sector = 2;
+    dims[0].text_pos = Vec2d(1.5, -2.5); dims[0].constraint = 4; dims[0].value = 30.0;
+    dims[1].kind = K::PointLine; dims[1].ea = 1; dims[1].ra = R::Center; dims[1].eb = 0;
+    dims[1].driven = true; dims[1].value = 7.25; dims[1].sector = 1;
+
+    auto same = [](const SketchDimension& a, const SketchDimension& b, bool with_sector) {
+        CHECK(a.kind == b.kind);
+        CHECK(a.ea == b.ea);
+        CHECK(a.eb == b.eb);
+        CHECK(a.ra == b.ra);
+        CHECK(a.rb == b.rb);
+        CHECK(a.text_pos.isApprox(b.text_pos));
+        CHECK(a.driven == b.driven);
+        CHECK(a.constraint == b.constraint);
+        CHECK(a.value == Approx(b.value));
+        if (with_sector) CHECK(a.sector == b.sector);
+    };
+    auto payload = [](const SketchDimension& d) {
+        std::ostringstream os;
+        { cereal::BinaryOutputArchive ar(os); SketchDimension c = d; ar(c); }
+        return os.str();
+    };
+    // A block written by hand: u32 version, u32 count, then [u32 len][item bytes] per item.
+    auto block_of = [](uint32_t version, const std::vector<std::string>& items) {
+        std::ostringstream os;
+        {
+            cereal::BinaryOutputArchive ar(os);
+            const uint32_t count = uint32_t(items.size());
+            ar(version, count);
+            for (const std::string& it : items) {
+                const uint32_t len = uint32_t(it.size());
+                ar(len);
+                ar(cereal::binary_data(it.data(), it.size()));
+            }
+        }
+        return os.str();
+    };
+
+    SECTION("round trip") {
+        std::vector<SketchDimension> back;
+        REQUIRE(sketch_dimensions_decode(sketch_dimensions_encode(dims), back));
+        REQUIRE(back.size() == 2);
+        same(back[0], dims[0], true);
+        same(back[1], dims[1], true);
+        CHECK(sketch_dimensions_encode({}).empty());
+        REQUIRE(sketch_dimensions_decode(std::string(), back));
+        CHECK(back.empty());
+    }
+    SECTION("a newer build's extra trailing bytes per item are skipped") {
+        const std::string junk("\x01\x02\x03\x04\x05\x06\x07", 7);
+        std::vector<SketchDimension> back;
+        REQUIRE(sketch_dimensions_decode(block_of(2, {payload(dims[0]) + junk, payload(dims[1]) + junk}), back));
+        REQUIRE(back.size() == 2);
+        same(back[0], dims[0], true);
+        same(back[1], dims[1], true);   // the second item starts exactly after the first's frame
+    }
+    SECTION("an older build's shorter item keeps what it has and defaults the rest") {
+        std::string p0 = payload(dims[0]);
+        p0.resize(p0.size() - sizeof(int32_t));     // no `sector`
+        std::vector<SketchDimension> back;
+        REQUIRE(sketch_dimensions_decode(block_of(1, {p0, payload(dims[1])}), back));
+        REQUIRE(back.size() == 2);
+        same(back[0], dims[0], false);
+        CHECK(back[0].sector == 0);
+        same(back[1], dims[1], true);
+    }
+    SECTION("a truncated block is refused without throwing") {
+        std::string b = sketch_dimensions_encode(dims);
+        b.resize(b.size() / 2);
+        std::vector<SketchDimension> back;
+        CHECK_FALSE(sketch_dimensions_decode(b, back));
     }
 }

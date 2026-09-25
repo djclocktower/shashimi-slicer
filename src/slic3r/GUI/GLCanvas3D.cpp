@@ -2181,7 +2181,12 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
 
     // Not in the CAD workspace's canvas (the one with a design sketch tool): Prepare's slicing
     // notifications do not belong over the Sketch/Modeling viewport.
-    if (m_canvas_type != ECanvasType::CanvasAssembleView && m_design_sketch_tool == nullptr) {
+#ifdef SLIC3R_CAD
+    const bool cad_canvas = m_design_sketch_tool != nullptr;
+#else
+    const bool cad_canvas = false;
+#endif
+    if (m_canvas_type != ECanvasType::CanvasAssembleView && !cad_canvas) {
         float right_margin = SLIDER_DEFAULT_RIGHT_MARGIN;
         float bottom_margin = SLIDER_DEFAULT_BOTTOM_MARGIN;
         if (m_canvas_type == ECanvasType::CanvasPreview && m_gcode_viewer.has_data()) { // ORCA only shift position of notifiations when sliders / gcode_viewer exist

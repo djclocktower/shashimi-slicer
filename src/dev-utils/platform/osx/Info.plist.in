@@ -33,7 +33,7 @@
       <key>CFBundleURLSchemes</key>
       <array>
         <string>orcasliceropen</string>
-        <string>orcaslicer</string>
+        <string>shashimislicer</string>
       </array>
     </dict>
   </array>

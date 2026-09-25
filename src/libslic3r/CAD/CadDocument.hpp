@@ -343,6 +343,9 @@ struct CadFeature {
     template<class Archive>
     void save(Archive& ar) const {
         std::string brep = (type == CadFeatureType::Import) ? brep_to_string(imported_solid) : std::string();
+        // Length-framed block, items framed inside it (SketchDimension.hpp): SketchDimension can
+        // grow without breaking the projects written before it did.
+        const std::string dims_block = sketch_dimensions_encode(dimensions);
         ar(type, name, enabled, shape, plane, width, height, radius,
            profile, entities, constraints, entity_constraints, imported_regions,
            import_offset, import_scale_x, import_scale_y, import_on_face, import_face_body,
@@ -378,7 +381,7 @@ struct CadFeature {
                expr,
                mate_kind, mate_cs_a, mate_cs_b, mate_offset, mate_angle, mate_flip,
                coordsys_face_kind, coordsys_face_edges,
-               dimensions);
+               dims_block);
     }
     template<class Archive>
     void load(Archive& ar) {
@@ -418,10 +421,15 @@ struct CadFeature {
                expr,
                mate_kind, mate_cs_a, mate_cs_b, mate_offset, mate_angle, mate_flip,
                coordsys_face_kind, coordsys_face_edges);
-        // Appended after the v5 framing: never present in a flat v4 feature (CadRecipeV4Scope).
-        if (!CadRecipeV4Scope::active())
-            ar(dimensions);
+        // Before the appended fields: a v5/v6 blob written before them ends here, and the throw
+        // from reading past its end must not skip restoring an Import feature's solid.
         imported_solid = brep_from_string(brep);
+        // Appended after the v5 framing: never present in a flat v4 feature (CadRecipeV4Scope).
+        if (!CadRecipeV4Scope::active()) {
+            std::string dims_block;
+            ar(dims_block);
+            sketch_dimensions_decode(dims_block, dimensions);
+        }
     }
 };
 
