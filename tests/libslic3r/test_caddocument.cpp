@@ -2144,6 +2144,7 @@ TEST_CASE("a v4 project still opens", "[CadDocument][recipe]")
         uint32_t v;
         ar(v);
         REQUIRE(v == 4);
+        CadRecipeV4Scope v4;   // the unframed v4 field list
         ar(flat);
     }
     REQUIRE_FALSE(flat.empty());
@@ -2280,10 +2281,13 @@ TEST_CASE("a truncated feature keeps what it could read", "[CadDocument][recipe]
         off += 4 + f_len.back();
     }
 
-    // Shorten feature 1 by dropping its final field (4 bytes): rewrite its length prefix
-    // and erase the tail bytes. The reader then runs out inside fa(f), throws, and keeps
-    // everything it had already assigned — that is the whole point of the try/catch.
-    const size_t drop = sizeof(uint32_t);
+    // Shorten feature 1 by dropping its final two fields — coordsys_face_edges (4 bytes) and
+    // the sketch `dimensions` vector appended after it (empty: just cereal's 8-byte size) —
+    // rewrite its length prefix and erase the tail bytes. The reader then runs out inside
+    // fa(f), throws, and keeps everything it had already assigned — that is the whole point of
+    // the try/catch.
+    REQUIRE(doc.features[1].dimensions.empty());
+    const size_t drop = sizeof(int32_t) + sizeof(uint64_t);
     REQUIRE(f_len[1] > drop);
     std::string shortened = blob;
     shortened.erase(f_off[1] + 4 + f_len[1] - drop, drop);
@@ -2299,6 +2303,7 @@ TEST_CASE("a truncated feature keeps what it could read", "[CadDocument][recipe]
     REQUIRE(loaded.features[1].name == doc.features[1].name);
     REQUIRE(loaded.features[1].coordsys_face_kind  == 777);   // right before the cut
     REQUIRE(loaded.features[1].coordsys_face_edges == -1);    // defaulted by the cut
+    REQUIRE(loaded.features[1].dimensions.empty());
     REQUIRE(loaded.features[0].name == doc.features[0].name);
     REQUIRE(loaded.features[2].name == doc.features[2].name);
 }
@@ -4167,6 +4172,7 @@ TEST_CASE("golden recipe v1 still deserialises", "[CadDocument]")
         uint32_t v;
         ar(v);
         REQUIRE(v <= CadDocument::ORCA_CAD_RECIPE_VERSION);
+        CadRecipeV4Scope v4;   // the fixture is the unframed v4 layout
         ar(features);
     }
 

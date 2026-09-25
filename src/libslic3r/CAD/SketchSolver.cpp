@@ -4,6 +4,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <algorithm>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <unordered_map>
@@ -170,6 +172,18 @@ static SketchSolveResult solve_system(std::vector<SketchEntity>& entities,
         switch (r) { case Role::P0: return e.p0; case Role::P1: return e.p1; case Role::Center: return e.center; }
         return e.p0;
     };
+    // Is `ei` a line segment for the solver (a Line entity or an axis reference)?
+    auto isLine = [&](int ei) {
+        return ei == kSketchRefAxisX || ei == kSketchRefAxisY ||
+               (valid(ei) && entities[ei].type == SketchEntity::Type::Line);
+    };
+    // The line's slvs point[0] / point[1], as coordinates. The axes are built head-first.
+    auto lineEnds = [&](int ei, Vec2d& a, Vec2d& b) {
+        if (ei == kSketchRefAxisX) { a = Vec2d(1, 0); b = Vec2d(0, 0); return; }
+        if (ei == kSketchRefAxisY) { a = Vec2d(0, 1); b = Vec2d(0, 0); return; }
+        a = valid(ei) ? entities[ei].p0 : Vec2d(0, 0);
+        b = valid(ei) ? entities[ei].p1 : Vec2d(1, 0);
+    };
     // A fixed reference point at (x,y) — used to pin coordinates (Fix / LockX / LockY).
     auto fixedRef = [&](double x, double y) -> Slvs_hEntity { return b.pt2d(G_FIXED, x, y); };
 
@@ -201,7 +215,11 @@ static SketchSolveResult solve_system(std::vector<SketchEntity>& entities,
             ref_ok = ptOf(c.ea, c.ra) && ptOf(c.eb, c.rb) && primOf(c.ec); break;
         case CT::SymmetricAboutY: case CT::SymmetricAboutX:
             ref_ok = ptOf(c.ea, c.ra) && ptOf(c.eb, c.rb); break;
-        case CT::PointOnLine: case CT::PointOnObject:
+        case CT::PointOnLine:
+            // PT_LINE_DISTANCE / PT_ON_LINE read the entity's two points: anything that is not a
+            // line segment (a circle picked by mistake) would send FindById into an abort.
+            ref_ok = ptOf(c.ea, c.ra) && primOf(c.eb) && isLine(c.eb); break;
+        case CT::PointOnObject:
             ref_ok = ptOf(c.ea, c.ra) && primOf(c.eb); break;
         case CT::EqualRadius:
         case CT::Collinear:
@@ -316,8 +334,18 @@ static SketchSolveResult solve_system(std::vector<SketchEntity>& entities,
         case CT::PointOnLine:
             if (std::abs(c.value) < 1e-9)
                 b.C(SLVS_C_PT_ON_LINE, 0, ptOf(c.ea, c.ra), 0, primOf(c.eb), 0);
-            else
-                b.C(SLVS_C_PT_LINE_DISTANCE, std::abs(c.value), ptOf(c.ea, c.ra), 0, primOf(c.eb), 0);
+            else {
+                // The model stores an UNSIGNED distance; PT_LINE_DISTANCE is signed (positive to
+                // the right of point[0]->point[1]). Take the sign from where the point is now, so
+                // the solve keeps it on its side instead of flipping it across the line.
+                Vec2d la, lb;
+                lineEnds(c.eb, la, lb);
+                const Vec2d p = coordOf(c.ea, c.ra);
+                const Vec2d d = lb - la, w = p - la;
+                const double side = -(d.x() * w.y() - d.y() * w.x());
+                b.C(SLVS_C_PT_LINE_DISTANCE, side < 0.0 ? -std::abs(c.value) : std::abs(c.value),
+                    ptOf(c.ea, c.ra), 0, primOf(c.eb), 0);
+            }
             break;
         case CT::PointOnObject:
             // Point (ea,ra) lies on entity edge eb: a circle rim -> PT_ON_CIRCLE,
@@ -550,6 +578,123 @@ SketchSolveResult sketch_solve_drag(std::vector<SketchEntity>& entities,
                                     int dragged_ei, SketchPointRole dragged_role)
 {
     return solve_impl(entities, constraints, dragged_ei, dragged_role);
+}
+
+// Which parameters are pinned is not something the C API reports (Slvs_Solve runs with
+// andFindFree=false), so ask the solver the equivalent question one parameter at a time: add an
+// equation that fixes the coordinate where it already is. If the coordinate was already determined
+// by the other constraints the new row is linearly dependent and the solve reports the system
+// inconsistent; if the solve accepts it, the coordinate was free. That is SolveSpace's own
+// MarkParamsFree test (one parameter removed from the unknowns, rank re-checked), phrased through
+// the public API.
+//
+// Constraints only couple entities they reference, so the probes run per connected component,
+// each against its own small system; a component that solves with zero DOF needs no probe at all.
+bool sketch_entities_defined(const std::vector<SketchEntity>& entities,
+                             const std::vector<SketchEntityConstraintDef>& constraints,
+                             std::vector<char>& defined, double max_ms)
+{
+    const int n = int(entities.size());
+    defined.assign(n, 0);
+    if (n == 0 || constraints.empty()) return true;   // nothing holds anything
+
+    const auto t0 = std::chrono::steady_clock::now();
+    auto out_of_time = [&]() {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() > max_ms;
+    };
+
+    std::vector<int> parent(n);
+    for (int i = 0; i < n; ++i) parent[i] = i;
+    std::function<int(int)> find = [&](int a) {
+        while (parent[a] != a) { parent[a] = parent[parent[a]]; a = parent[a]; }
+        return a;
+    };
+    auto unite = [&](int a, int b) {
+        if (a < 0 || b < 0 || a >= n || b >= n) return;
+        a = find(a); b = find(b);
+        if (a != b) parent[a] = b;
+    };
+    for (const auto& c : constraints) { unite(c.ea, c.eb); unite(c.ea, c.ec); unite(c.eb, c.ec); }
+    std::map<int, std::vector<int>> groups;               // component root -> constraint indices
+    for (size_t i = 0; i < constraints.size(); ++i) {
+        const auto& c = constraints[i];
+        const int a = (c.ea >= 0 && c.ea < n) ? c.ea : (c.eb >= 0 && c.eb < n) ? c.eb : c.ec;
+        if (a < 0 || a >= n) continue;
+        groups[find(a)].push_back(int(i));
+    }
+
+    for (const auto& [root, cidx] : groups) {
+        std::vector<int> ents;                            // global indices, in order
+        std::map<int, int> local;
+        auto take = [&](int e) {
+            if (e < 0 || e >= n || local.count(e)) return;
+            local[e] = int(ents.size());
+            ents.push_back(e);
+        };
+        for (int ci : cidx) { take(constraints[ci].ea); take(constraints[ci].eb); take(constraints[ci].ec); }
+        std::vector<SketchEntity> sub;
+        sub.reserve(ents.size());
+        for (int e : ents) sub.push_back(entities[e]);
+        std::vector<SketchEntityConstraintDef> subc;
+        subc.reserve(cidx.size());
+        for (int ci : cidx) {
+            SketchEntityConstraintDef d = constraints[ci];
+            auto map1 = [&](int& e) { if (e >= 0) e = local.count(e) ? local[e] : -1; };
+            map1(d.ea); map1(d.eb); map1(d.ec);
+            subc.push_back(d);
+        }
+
+        const SketchSolveResult r0 = sketch_solve(sub, subc);
+        if (!r0.ok) { defined.assign(n, 0); return false; }
+        if (r0.dof == 0) { for (int e : ents) defined[e] = 1; continue; }
+        if (out_of_time()) continue;                      // conservative: under-defined
+
+        // True when the solver ACCEPTS the probe, i.e. the probed quantity was free.
+        auto accepts = [&](const SketchEntityConstraintDef& probe) {
+            std::vector<SketchEntityConstraintDef> cons = subc;
+            cons.push_back(probe);
+            std::vector<SketchEntity> tmp = sub;
+            return sketch_solve(tmp, cons).ok;
+        };
+        std::vector<char> sub_def(sub.size(), 0);
+        bool timed_out = false;
+        for (int i = 0; i < int(sub.size()) && !timed_out; ++i) {
+            const SketchEntity& e = sub[i];
+            std::vector<std::pair<Role, Vec2d>> pts;
+            switch (e.type) {
+            case SketchEntity::Type::Line:
+            case SketchEntity::Type::BSpline:
+                pts = {{Role::P0, e.p0}, {Role::P1, e.p1}}; break;
+            case SketchEntity::Type::Arc:
+            case SketchEntity::Type::EllipseArc:
+                pts = {{Role::P0, e.p0}, {Role::P1, e.p1}, {Role::Center, e.center}}; break;
+            case SketchEntity::Type::Circle:
+            case SketchEntity::Type::Ellipse:
+                pts = {{Role::Center, e.center}}; break;
+            case SketchEntity::Type::Point:
+                pts = {{Role::P0, e.p0}}; break;
+            }
+            bool fixed = true;
+            for (const auto& [role, p] : pts) {
+                SketchEntityConstraintDef lx;
+                lx.type = CT::LockX; lx.ea = i; lx.ra = role; lx.value = p.x();
+                if (accepts(lx)) { fixed = false; break; }
+                SketchEntityConstraintDef ly;
+                ly.type = CT::LockY; ly.ea = i; ly.ra = role; ly.value = p.y();
+                if (accepts(ly)) { fixed = false; break; }
+            }
+            if (fixed && e.type == SketchEntity::Type::Circle) {
+                SketchEntityConstraintDef dm;
+                dm.type = CT::Diameter; dm.ea = i; dm.value = 2.0 * e.radius;
+                if (accepts(dm)) fixed = false;
+            }
+            sub_def[i] = fixed ? 1 : 0;
+            timed_out = out_of_time();
+        }
+        if (timed_out) continue;                          // partial answer: keep it conservative
+        for (size_t k = 0; k < ents.size(); ++k) defined[ents[k]] = sub_def[k];
+    }
+    return true;
 }
 
 } // namespace Slic3r

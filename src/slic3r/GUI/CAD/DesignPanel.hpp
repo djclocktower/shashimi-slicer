@@ -3,7 +3,6 @@
 
 #include <wx/panel.h>
 #include <wx/scrolwin.h>
-#include <wx/treebase.h>   // wxTreeItemId
 
 #include <vector>
 #include <memory>
@@ -16,14 +15,10 @@
 
 class ComboBox;    // Orca dropdown (Widgets/ComboBox.hpp) — replaces wxChoice everywhere here
 class StaticBox;   // Orca rounded card frame (Widgets/StaticBox.hpp)
-class wxCheckBox;
 class wxCheckListBox;
 class wxSpinCtrl;
 class wxSpinCtrlDouble;
-class wxTreeCtrl;
-class wxImageList;
 class wxStaticText;
-class wxStaticLine;
 class Button;      // Orca-styled button (Widgets/Button.hpp)
 class CheckBox;    // Orca teal checkbox (Widgets/CheckBox.hpp)
 class wxSizer;
@@ -38,15 +33,20 @@ class wxTextCtrl;
 class wxListCtrl;
 class wxButton;
 class wxPanel;
-class ScalableButton;
+class wxSimplebook;
 
 namespace Slic3r { namespace GUI {
 
 class DesignCanvas;
+class CadRibbon;
+class CadToolButton;
+class CadFeatureTree;
+class CadPropertyManager;
 
-// Design (CAD) tab: a sketch-first, Onshape-style form-driven CAD panel.
-// Sketch and Extrude are independent tools: the user creates a Sketch first,
-// then selects it and Extrudes to produce a solid.
+// The CAD workspace shown under the Sketch and Modeling tabs, with a SolidWorks-style front end:
+// the CommandManager ribbon (CadRibbon) on top, the FeatureManager tree (CadFeatureTree) or the
+// PropertyManager (CadPropertyManager) on the left, the viewport, and a status bar. The front end
+// only routes: every command runs the same handler its shortcut and its offer-menu row run.
 class DesignPanel : public wxPanel, public LazyInstance<DesignPanel>
 {
 public:
@@ -102,7 +102,7 @@ public:
 protected:
     // Runs whenever set_workspace_tab() is called (every show of a CAD tab), with
     // m_workspace_tab already updated. The ribbon switches its tool set here.
-    void on_workspace_tab_changed() {}
+    void on_workspace_tab_changed();
 
 private:
     enum class Tool { None, Sketch, Extrude, Dressup, Hole, Thread, Shell, Revolve, Sweep, Pattern, Plane, Loft, Draft, Boolean, Cut, Insert, Axis, CoordSys, SurfaceExtrude, SurfaceRevolve, SurfaceLoft, SurfaceFill, SurfaceOffset, ThickenSurface, Transform, Mirror, Thicken, Rib, Project, DeleteFace, Helix, Mate };
@@ -122,6 +122,40 @@ private:
     enum class UiMode { Feature, Sketch, Constrain };
     void set_ui_mode(UiMode m);
     void apply_dof_status(int dof, bool ok, bool has_constraints);
+
+    // --- SolidWorks front end ------------------------------------------------------------------
+    void build_ribbon();                 // CommandManager pages; every button reuses an existing handler
+    void update_ribbon_state();          // Exit Sketch / Cancel / mode label / toggles follow the state
+    // Arm a sketch entity tool (mode is a DesignSketchTool::Mode). Starts the session on the picked
+    // plane or face when there is none yet; the one path behind the keys, the offer and the ribbon.
+    void select_sketch_tool(int mode, const wxString& hint);
+    // The ribbon's door onto select_sketch_tool: with no live sketch and no freshly picked plane or
+    // face it asks for one first ("Select a plane or planar face to sketch on"), remembering the
+    // tool, which then arms itself when the plane is picked (fire_pending_sketch_tool).
+    void ribbon_sketch_tool(int mode, const wxString& hint, bool construction = false, bool view_normal = false);
+    bool fresh_sketch_target(wxString& what) const;   // a planar face, or a plane picked since the last sketch
+    void start_sketch_command();         // ribbon Sketch: prompt for a plane, then open the sketch
+    void fire_pending_sketch_tool();
+    // A reference plane chosen in the viewport or the FeatureManager (0/1/2 = XY/XZ/YZ, 3+ datums).
+    void pick_reference_plane(int base);
+    // Run a Features-page command. A live sketch is exited (committed) first, as SolidWorks does
+    // when a feature is started from inside a sketch.
+    void run_feature_command(const std::function<void()>& action);
+    void show_left_page(bool property_manager);   // FeatureManager <-> PropertyManager
+    void on_tree_selected(int kind, int index);   // CadFeatureTree::NodeKind as int
+    void on_tree_menu(int kind, int index, const wxPoint& screen);
+    // SolidWorks default names (Sketch1, Boss-Extrude1, Cut-Extrude1, LPattern1, ...): the prefix
+    // for this type/mode, numbered one past the highest already in the document. `variant` picks
+    // the Pattern kind (0 linear, 1 circular).
+    std::string next_feature_name(CadFeatureType type, BooleanMode mode = BooleanMode::New, int variant = 0) const;
+    std::string next_name(const std::string& prefix) const;
+    std::string editing_sketch_name() const;   // the sketch being edited, else the next sketch's name
+    // Extrude PropertyManager <-> the feature's fields.
+    ExtrudeEnd  extrude_end_from_card() const;
+    BooleanMode extrude_mode_from_card() const;
+    double      extrude_taper_from_card() const;
+    void        load_extrude_card(ExtrudeEnd end, BooleanMode mode, double taper_deg);
+    void        sync_extrude_card();     // enable/disable rows and retitle for the current choices
     // Unified action-bar dispatch: one Confirm / one Cancel for every tool and mode.
     void tool_confirm();        // ✓ : commit the active feature / sketch / constrain session
     void tool_cancel();         // ✗ : cancel the active feature / discard / exit
@@ -228,6 +262,32 @@ private:
     void load_recipe(const std::string& blob);
     void refresh_tree();
     void set_status_ok();
+    CadRibbon*          m_ribbon{nullptr};
+    CadFeatureTree*     m_ftree{nullptr};
+    CadPropertyManager* m_pm{nullptr};
+    wxPanel*            m_left{nullptr};          // FeatureManager | PropertyManager pane
+    wxSimplebook*       m_left_book{nullptr};
+    CadToolButton*      m_tab_fm{nullptr};        // the two tab icons over the left pane
+    CadToolButton*      m_tab_pm{nullptr};
+    wxPanel*            m_statusbar{nullptr};
+    bool                m_pm_active{false};       // a command is open (some card is visible)
+    wxSizer*            m_relations_group{nullptr};   // the Relations group (Display/Delete Relations)
+    // A sketch tool pressed with no sketch open waits here for its plane (mode -1 = none).
+    int                 m_pending_sketch_mode{-1};
+    wxString            m_pending_sketch_hint;
+    bool                m_pending_construction{false};
+    bool                m_pending_view_normal{false};
+    // A plane or face picked since the last sketch began. The ribbon only sketches without asking
+    // on a FRESH pick; m_plane_picked stays set for the offer and key paths, which keep reusing it.
+    bool                m_plane_fresh{false};
+    bool                m_ribbon_exit_face{false};    // the corner button currently reads Exit Sketch
+    wxStaticText*       m_sketch_mode_label{nullptr}; // far right of the Sketch page
+    // Extruded Cut / Revolved Cut open the same tools with BooleanMode::Cut preselected.
+    enum class ModePreset { None, Boss, Cut };
+    ModePreset          m_mode_preset{ModePreset::None};
+    // Card -> PropertyManager title: the first visible card in this list names the command.
+    struct CardMeta { wxSizer* box; wxStaticText* title; wxString fixed; std::string icon; bool primary; };
+    std::vector<CardMeta> m_card_meta;
 
     // Feature-tree editing (Onshape-style): act on the selected tree row.
     void on_delete_feature();
@@ -331,7 +391,7 @@ private:
     void       update_fillet_gizmo();     // edge-anchored radius arrow (Dressup card)
     void       sync_dressup_target();     // Dressup card: show picked edge vs group, gate the combo
     void       update_hole_gizmo();       // footprint circle + diameter/depth arrows (Hole card)
-    // A FEATURE button whose tool needs bodies it may not have yet. Greyed with an explanatory
+    // A ribbon command whose tool needs bodies it may not have yet. Greyed with an explanatory
     // tooltip below min_bodies, rather than accepting the click and refusing afterwards.
     struct BodyGate { wxWindow* btn{nullptr}; int min_bodies{1}; wxString tip_live, tip_gated; };
     std::vector<BodyGate> m_body_gates;
@@ -366,16 +426,14 @@ private:
     std::map<int, std::function<void()>> m_keys_sketch;
     std::map<int, std::function<void()>> m_keys_feature;
 
-    StaticBox* m_tree_box{nullptr};   // framed feature-tree section
-    StaticBox* m_parts_box{nullptr};  // framed bodies section (hidden while empty)
-    StaticBox* m_cards{nullptr};      // one framed panel holding every tool dialog (one visible at a time)
-    void      update_cards_frame();     // show that frame iff some card inside it is visible
+    wxPanel*  m_cards{nullptr};       // every tool's controls (one card visible at a time), in the PropertyManager
+    // Show the cards iff one is visible, and follow that with the left pane: a visible card is an
+    // open command, which puts the PropertyManager up (titled after the card).
+    void      update_cards_frame();
     void      show_move_card(bool show);
     void      apply_move_card();       // numeric move/rotate -> same xform the gizmo builds
     void      push_polygon_params();
-    wxSizer*  m_tb_commit{nullptr};   // far-right Commit to Plate, beside Confirm/Cancel
-    wxSizer*  m_tb_doc{nullptr};      // toolbar document/view actions (new, commit, export, section, place)
-    CheckBox* m_show_bed{nullptr};    // view option: draw the printer bed + plate grid, or not
+    bool      m_show_bed{true};       // view option: draw the printer bed + plate grid, or not
     wxSizer*  m_box_move{nullptr};      // Move/Rotate numeric options (distance, axis, angle)
     wxSizer*  m_box_sketch{nullptr};
     wxSizer*  m_box_extrude{nullptr};
@@ -479,29 +537,12 @@ private:
     // action bar (the Design UX contract), and the banner never grows a second pair.
     wxPanel*      m_sketch_banner{nullptr};
     wxStaticText* m_sketch_banner_txt{nullptr};
-    wxScrolledWindow* m_toolbar{nullptr};   // horizontally scrollable so the action bar stays reachable on narrow windows
-    wxSizer*  m_tb_feature{nullptr};
-    wxSizer*  m_tb_sketch{nullptr};
-    // The 20 constraint icon buttons, shown during BOTH Sketch and Constrain (Fase 4.2 live
-    // path: a constraint must be applicable while drawing, not only after committing).
-    wxSizer*  m_tb_relations{nullptr};
-    // Unified Confirm/Cancel action bar (right end of the ribbon). Shown whenever any
-    // tool or mode is active; the single confirm/cancel surface for the whole tab.
-    wxSizer*  m_tb_action{nullptr};
-    // Persistent Undo/Redo group at the left of the ribbon — always visible, independent
-    // of the mode-gated tool groups. The buttons are greyed per the document history and
-    // the do_undo_redo gate (see update_undo_redo_buttons).
-    wxSizer*        m_tb_history{nullptr};
-    ScalableButton* m_btn_undo{nullptr};
-    ScalableButton* m_btn_redo{nullptr};
+    // Undo/Redo in the ribbon's corner, greyed per the document history and the do_undo_redo gate.
+    CadToolButton*    m_btn_undo{nullptr};
+    CadToolButton*    m_btn_redo{nullptr};
     void update_undo_redo_buttons();   // enable/disable Undo/Redo from can_undo/can_redo + gate
-    // All tool buttons, for the active-tool teal highlight (Onshape-style).
-    std::vector<ScalableButton*> m_tool_btns;
-    ScalableButton*              m_active_tool_btn{nullptr};
-    void set_active_tool_btn(ScalableButton* b);   // nullptr clears the highlight
-    // Owns the themed DropDown flyouts (and the item vectors they hold by ref).
-    std::vector<std::shared_ptr<void>> m_flyout_keepalive;
-    wxCheckBox*       m_construction{nullptr};   // sketch-mode construction toggle
+    bool              m_construction{false};     // draw construction geometry next (Q / For Construction)
+    void              set_construction(bool on); // store, push to the live sketch, check the ribbon toggle
     wxSpinCtrlDouble* m_move_dx{nullptr};        // Move/Rotate card: world translation
     wxSpinCtrlDouble* m_move_dy{nullptr};
     wxSpinCtrlDouble* m_move_dz{nullptr};
@@ -527,10 +568,17 @@ private:
     wxSpinCtrlDouble* m_height{nullptr};
     wxSpinCtrlDouble* m_radius{nullptr};
     wxSpinCtrlDouble* m_distance{nullptr};
-    ComboBox*         m_extrude_end{nullptr};   // Blind/Symmetric/TwoSided/ThroughAll/UpTo*
-    wxSpinCtrlDouble* m_distance2{nullptr};     // second-side depth (Two-sided)
+    // Extrude PropertyManager (SolidWorks groups). m_mode is the operation (Boss / Cut /
+    // Intersect) and m_merge picks Add vs New for a boss; m_extrude_end is Direction 1's end
+    // condition (Blind / Through All / Up To Vertex / Up To Surface / Mid Plane) and the
+    // Direction 2 box makes it Two-sided. The helpers map all of it onto ExtrudeEnd/BooleanMode.
+    ComboBox*         m_extrude_end{nullptr};
+    wxSpinCtrlDouble* m_distance2{nullptr};     // Direction 2 depth (Two-sided)
+    CheckBox*         m_extrude_dir2{nullptr};  // Direction 2 on = ExtrudeEnd::TwoSided
+    CheckBox*         m_taper_on{nullptr};      // Draft on/off
     wxSpinCtrlDouble* m_taper{nullptr};         // draft angle (deg)
-    CheckBox*         m_flip{nullptr};          // reverse extrude direction
+    CheckBox*         m_flip{nullptr};          // Reverse Direction
+    CheckBox*         m_merge{nullptr};         // Merge result (boss only)
 
     wxStaticText*     m_extrude_sketch_label{nullptr};
     int               m_extrude_sketch_ref{-1};
@@ -667,9 +715,6 @@ private:
     void              on_add_variable();
     void              on_edit_variable();
     void              on_remove_variable();
-
-    // Feature-tree button
-    ScalableButton*   m_btn_interfere{nullptr};
 
     // Pattern controls (replicate the target body: linear or circular).
     ComboBox*         m_pattern_type{nullptr};      // 0 = Linear, 1 = Circular
@@ -846,21 +891,6 @@ private:
     std::function<void(double)> m_value_cont;   // deferred apply, run on Confirm
     std::function<void()>       m_value_cancel; // optional action when the card is cancelled
 
-    // Feature tree: a wxTreeCtrl with per-feature-type icons. Callers keep using
-    // integer row indices via tree_selection()/set_tree_selection(); m_tree_items
-    // maps feature order -> tree node, rebuilt by refresh_tree().
-    wxTreeCtrl*               m_tree{nullptr};
-    wxTreeCtrl*               m_parts{nullptr};        // Bodies list under the feature tree
-    wxStaticText*             m_parts_label{nullptr};  // its "Bodies" caption (hidden when empty)
-    wxBoxSizer*               m_parts_hdr{nullptr};    // Bodies card header (icon + title)
-    wxStaticLine*             m_parts_rule{nullptr};   // rule under that header
-    wxBoxSizer*               m_hdr_tree_row{nullptr}; // Feature tree header: title + row actions
-    wxStaticText*             m_hdr_tree{nullptr};     // its title label
-    wxImageList*              m_tree_images{nullptr};
-    std::vector<wxTreeItemId> m_tree_items;
-    // Parts list: tree rows for each body (parallel to m_doc.bodies). Selecting one
-    // highlights that body and makes it the target for the next op.
-    std::vector<wxTreeItemId> m_tree_body_items;
 
     // Section views (non-destructive): named "Section View N" entries listed in the tree, each a
     // horizontal clip height. View-only — NOT bodies/features, never serialized. Key X adds one;
@@ -871,10 +901,8 @@ private:
     bool      m_section_on{false};
     double    m_section_cut_z{0.0};
     bool      m_section_upper{false};             // false = keep lower half, true = upper
-    ScalableButton* m_section_flip_btn{nullptr};  // toolbar action; enabled only while the section is on
     void toggle_section_view();                   // Section View button / X: on <-> off
     void flip_section_view();                     // Flip button / F: opposite half
-    void update_section_flip_btn();               // enable the Flip button iff the section is on
     // Per-body visibility (parallel to m_doc.bodies; index stable across recompute since
     // bodies are appended in feature order). Empty/grown to all-visible by sync_body_visible().
     std::vector<bool> m_body_visible;
@@ -893,13 +921,12 @@ private:
     void on_set_body_color();             // Color tool: pick a per-body display colour override
     void on_boolean_tool();               // Boolean (combine bodies): needs two solids, then opens the tool
     int  tree_selection() const;          // selected feature row, or wxNOT_FOUND
-    int  tree_body_selection() const;     // selected Parts-list body index, or -1
-    void refresh_parts();                 // rebuild the Bodies list under the feature tree
+    int  tree_body_selection() const;     // selected body row (Solid Bodies folder), or -1
     void sync_sidebar_width();            // keep the panel as wide as Prepare's sidebar
     void set_tree_selection(int row);
-    static int tree_icon_for(CadFeatureType t);
 
     wxStaticText*     m_status{nullptr};
+    wxStaticText*     m_status_line{nullptr};   // what the status bar shows (m_status is the store)
     // m_status's foreground as created, captured before any caller touches it. Callers signal
     // "no opinion" by setting wxNullColour, which restores exactly this — so it is the only
     // reliable way to tell a chosen colour (the error red) from the default. See set_status().
@@ -917,9 +944,8 @@ private:
     int               m_dof_last{-1};
     bool              m_dof_last_ok{true};
     bool              m_dof_last_has{false};
-    int               m_feature_counter{0};
-
-    std::vector<wxButton*> m_confirm_btns;
+    // The PropertyManager's OK: greyed by refresh_preview while the candidate is invalid.
+    std::vector<wxWindow*> m_confirm_btns;
 
     // Edit-in-place state: add-mode is m_edit_index == -1. Single-feature edit
     // (Sketch or Extrude independently) uses only m_edit_index as the row to replace.

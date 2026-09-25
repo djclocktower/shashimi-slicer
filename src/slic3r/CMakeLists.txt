@@ -820,6 +820,12 @@ if (SLIC3R_CAD)
     list(APPEND SLIC3R_GUI_SOURCES
         GUI/CAD/CadTabPage.cpp
         GUI/CAD/CadTabPage.hpp
+        GUI/CAD/CadFeatureTree.cpp
+        GUI/CAD/CadFeatureTree.hpp
+        GUI/CAD/CadPropertyManager.cpp
+        GUI/CAD/CadPropertyManager.hpp
+        GUI/CAD/CadRibbon.cpp
+        GUI/CAD/CadRibbon.hpp
         GUI/CAD/DesignPanel.cpp
         GUI/CAD/DesignPanel.hpp
         GUI/CAD/DesignCanvas.cpp

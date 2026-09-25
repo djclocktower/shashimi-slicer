@@ -3,6 +3,7 @@
 
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/CAD/SketchEngine.hpp"
+#include "libslic3r/CAD/SketchDimension.hpp"
 #include "libslic3r/CAD/GeometryEngine.hpp"   // FaceGroup
 #include "libslic3r/Color.hpp"            // ColorRGBA (per-body display colour override)
 
@@ -32,6 +33,19 @@ enum class ExtrudeEnd { Blind, Symmetric, TwoSided, ThroughAll, UpToFace, UpToVe
 // inline cereal save()/load() can resolve these non-dependent calls).
 std::string brep_to_string(const TopoDS_Shape& s);
 TopoDS_Shape brep_from_string(const std::string& d);
+
+// While alive, CadFeature::load reads the v4 FLAT layout. v4 wrote the features back to back with
+// no length framing, so its reader has to stop at exactly the fields v4 had: anything appended
+// since would be read out of the NEXT feature's bytes. Fields appended after the framing (v5) are
+// therefore read only from framed blobs — which is what makes appending them safe.
+class CadRecipeV4Scope {
+public:
+    CadRecipeV4Scope()  { active() = true; }
+    ~CadRecipeV4Scope() { active() = false; }
+    CadRecipeV4Scope(const CadRecipeV4Scope&) = delete;
+    CadRecipeV4Scope& operator=(const CadRecipeV4Scope&) = delete;
+    static bool& active() { static thread_local bool on = false; return on; }
+};
 
 struct CadFeature {
     CadFeatureType type{CadFeatureType::Sketch};
@@ -320,6 +334,12 @@ struct CadFeature {
     double mate_angle{0};       // rotation about A's z, degrees
     bool   mate_flip{false};    // oppose the two z axes (face-to-face)
 
+    // Sketch: Smart Dimension annotations on `entities`. A driving one references its constraint
+    // in `entity_constraints` by index (SketchDimension::constraint); a driven one only measures.
+    // Last in the field list below: a project written before it simply ends early and loads
+    // with no dimensions.
+    std::vector<SketchDimension> dimensions;
+
     template<class Archive>
     void save(Archive& ar) const {
         std::string brep = (type == CadFeatureType::Import) ? brep_to_string(imported_solid) : std::string();
@@ -357,7 +377,8 @@ struct CadFeature {
                pattern_curve_sketch, pattern_curve_entity,
                expr,
                mate_kind, mate_cs_a, mate_cs_b, mate_offset, mate_angle, mate_flip,
-               coordsys_face_kind, coordsys_face_edges);
+               coordsys_face_kind, coordsys_face_edges,
+               dimensions);
     }
     template<class Archive>
     void load(Archive& ar) {
@@ -397,6 +418,9 @@ struct CadFeature {
                expr,
                mate_kind, mate_cs_a, mate_cs_b, mate_offset, mate_angle, mate_flip,
                coordsys_face_kind, coordsys_face_edges);
+        // Appended after the v5 framing: never present in a flat v4 feature (CadRecipeV4Scope).
+        if (!CadRecipeV4Scope::active())
+            ar(dimensions);
         imported_solid = brep_from_string(brep);
     }
 };
@@ -477,6 +501,11 @@ public:
     int  add_sketch_entities(const std::vector<SketchEntity>& entities,
                              const SketchPlane& plane, const std::string& name,
                              const std::vector<SketchEntityConstraintDef>& constraints = {});
+    // Same, carrying the sketch's Smart Dimension annotations (indices into `constraints`).
+    int  add_sketch_entities(const std::vector<SketchEntity>& entities,
+                             const SketchPlane& plane, const std::string& name,
+                             const std::vector<SketchEntityConstraintDef>& constraints,
+                             const std::vector<SketchDimension>& dimensions);
     // Project edges of source_body onto plane, producing a sketch feature whose
     // entities are (re)derived on every recompute.
     int  add_project_edges(int source_body, const std::vector<int>& edge_ids, int face,

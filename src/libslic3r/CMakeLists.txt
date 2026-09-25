@@ -525,6 +525,8 @@ if (SLIC3R_CAD)
             CAD/SketchConstraints.hpp
             CAD/SketchSolver.cpp
             CAD/SketchSolver.hpp
+            CAD/SketchDimension.cpp
+            CAD/SketchDimension.hpp
             CAD/SketchInference.cpp
             CAD/SketchInference.hpp
             CAD/SketchImport.cpp

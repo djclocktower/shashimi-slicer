@@ -521,6 +521,17 @@ int CadDocument::add_sketch_entities(const std::vector<SketchEntity>& entities,
     return int(features.size()) - 1;
 }
 
+int CadDocument::add_sketch_entities(const std::vector<SketchEntity>& entities,
+                                     const SketchPlane& plane, const std::string& name,
+                                     const std::vector<SketchEntityConstraintDef>& constraints,
+                                     const std::vector<SketchDimension>& dimensions)
+{
+    const int idx = add_sketch_entities(entities, plane, name, constraints);
+    features[idx].dimensions = dimensions;
+    sketch_dimensions_sanitize(features[idx].dimensions, int(entities.size()), int(constraints.size()));
+    return idx;
+}
+
 // Solve Onshape-style constraints on a SketchEntity list (Fase 4.3). All entity
 // types participate: Line (P0,P1), Arc (P0,P1,Center), Circle (Center), Point (P0).
 // Solved coordinates are written back, with arc angles reflowed from the solved
@@ -3961,7 +3972,10 @@ bool CadDocument::deserialize_recipe(const std::string& blob)
         }
         if (v == 4) {
             // Pre-framing flat path, unchanged: v4 projects keep opening exactly as before.
-            ar(features);
+            {
+                CadRecipeV4Scope v4;   // read only the fields a v4 feature has
+                ar(features);
+            }
             ar(variables);
             return recompute();
         }

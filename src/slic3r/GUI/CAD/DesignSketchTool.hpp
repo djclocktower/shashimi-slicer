@@ -6,6 +6,7 @@
 #include "libslic3r/CAD/CadDocument.hpp"   // CadBody for per-body solid picking
 #include "libslic3r/CAD/SketchInference.hpp"
 #include "libslic3r/CAD/SketchSolver.hpp"
+#include "libslic3r/CAD/SketchDimension.hpp"
 #include "slic3r/GUI/GLModel.hpp"
 #include "slic3r/GUI/GLSelectionRectangle.hpp"   // left-drag rubber band over the committed bodies
 #include <functional>
@@ -39,7 +40,7 @@ class Camera;     // fwd — move_gizmo_arm() sizes the gizmo from the current z
 // picked. Selection is a state, not a decoration: it gets its own colour and keeps it.
 inline ColorRGBA design_selection_color(float alpha = 1.0f)
 {
-    return ColorRGBA(0.20f, 0.85f, 1.00f, alpha);
+    return ColorRGBA(0.31f, 0.757f, 1.00f, alpha);   // #4FC1FF, SolidWorks' selection cyan-blue
 }
 // Unselected geometry — 2D regions and faces — is neutral translucent grey, so the only
 // coloured thing in the viewport is the thing you picked.
@@ -115,6 +116,11 @@ public:
     void begin_edit(const std::vector<SketchEntity>& entities,
                     const std::vector<SketchEntityConstraintDef>& constraints,
                     const SketchPlane& plane);
+    // Same, restoring the sketch's Smart Dimension annotations (CadFeature::dimensions).
+    void begin_edit(const std::vector<SketchEntity>& entities,
+                    const std::vector<SketchEntityConstraintDef>& constraints,
+                    const SketchPlane& plane,
+                    const std::vector<SketchDimension>& dimensions);
     // Drop rigid 2D art (Text / SVG outlines) INTO the live sketch as ordinary line entities,
     // so it joins the sketch being drawn instead of committing a separate Sketch feature.
     // `regions` are loops in PLANE coordinates; every closed loop becomes a closed polyline, so
@@ -461,7 +467,7 @@ public:
     const std::vector<int>& selection() const { return m_selection; }
     // Entities OR bare points: clear_selection() drops both, so "is anything picked" must ask
     // about both, or Esc at idle would report nothing to do while a point sat highlighted.
-    bool sketch_has_selection() const { return !m_selection.empty() || !m_point_sel.empty(); }
+    bool sketch_has_selection() const { return !m_selection.empty() || !m_point_sel.empty() || m_dim_sel >= 0; }
     // Type of the first selected entity. False when nothing is selected, so the offer menu can
     // tell a line from an arc from a point and stop collapsing every sketch selection to "none".
     bool first_selected_type(SketchEntity::Type& out) const {
@@ -561,6 +567,7 @@ public:
     // Delete while sketching: the selected entities, or the last drawn one if none is selected.
     bool delete_selected_or_last() {
         if (!m_active) return false;
+        if (m_selection.empty() && m_dim_sel >= 0) return delete_dimension(m_dim_sel);
         if (m_selection.empty()) {
             if (m_entities.empty()) return false;
             m_selection.assign(1, int(m_entities.size()) - 1);
@@ -617,6 +624,22 @@ public:
     // tool records a SketchEntityConstraintDef per applied dimension); committed
     // alongside the entities on finish() so the kernel keeps enforcing them.
     const std::vector<SketchEntityConstraintDef>& constraints() const { return m_constraints; }
+
+    // ---- Smart Dimension (Mode::Dimension) -------------------------------------------------
+    // The sketch's dimension annotations. A driving one indexes its constraint in constraints().
+    // Valid for the live session AND, while on_commit_entities runs inside finish(), for the
+    // sketch being committed — so the commit handler can store them with the feature.
+    const std::vector<SketchDimension>& dimensions() const { return m_dimensions; }
+    // A first Smart Dimension pick is held (Esc drops it before it leaves the tool).
+    bool smart_dim_pending() const { return m_sd_first.has_value(); }
+    int  selected_dimension() const { return m_dim_sel; }
+    // Driving <-> driven. Driving needs the constraint to solve; otherwise it stays driven and
+    // says so through on_status_message. Returns true if the state changed.
+    bool toggle_dimension_driven(int di);
+    // Remove the annotation and, for a driving one, its constraint.
+    bool delete_dimension(int di);
+    // One-line status text for the host's status line (e.g. "made driven").
+    std::function<void(const std::string&)> on_status_message;
 
     // Emitted by finish() with the accumulated entities + driving constraints.
     std::function<void(const std::vector<SketchEntity>&,
@@ -688,22 +711,20 @@ private:
     std::vector<int> connected_loop(int seed) const;      // entities joined by shared endpoints
     void apply_angle_between(int ia, int ib, double deg); // rotate line B to set the A^B angle
     bool selection_valid() const;                         // all selection indices in range
-    void record_dimension_constraint(double v);           // append the driving def for the selection
+    int  record_dimension_constraint(double v);           // driving def + annotation for the selection
     void resolve_live();                                  // solve accumulated constraints on m_entities now
     // Drag-aware re-solve: pins the dragged point at its current coord and lets the
     // solver move the rest (Slvs dragged[]). Used live while a point grab is active.
     void resolve_live_drag(int dragged_ei, SketchPointRole dragged_role);
 
-    // Placed dimension annotation. References entity points/entities (not cached
-    // coords) so the quote follows the geometry as the kernel solves it. `value`
-    // drives the constraint stored at index `con` in m_constraints.
+    // Live (non-driving) characteristic quote, and the value type the gizmo labels format through
+    // dim_text. Placed sketch dimensions are SketchDimension (m_dimensions), not this.
     struct DimAnnot {
         DimType         kind{DimType::None};
         int             ea{-1}; SketchPointRole ra{SketchPointRole::P0};
         int             eb{-1}; SketchPointRole rb{SketchPointRole::P0};
         double          value{0.0};
         double          side{1.0};   // perpendicular offset sign of the quote line
-        int             con{-1};     // slot in m_constraints driving this dimension
         Vec2d           label_pos{0, 0};  // cached label centre (plane coords), for picking
     };
 
@@ -761,6 +782,38 @@ private:
     bool hit_test_point(const Vec2d& p, double tol, int& ei, SketchPointRole& role) const;
     int  hit_test_dimension(const Vec2d& p, double tol) const;              // nearest dim label
     void edit_dimension(int di);                                            // reopen value card for di
+    // ---- Smart Dimension internals ----
+    // What a Smart Dimension click at p would pick: a point (endpoint / centre / origin / a Point
+    // entity) beats the curve it belongs to; a midpoint or an edge picks the entity. `marker` is
+    // where the hover highlight goes.
+    bool smart_pick_at(const Vec2d& p, double tol, SmartDimPick& out, Vec2d& marker) const;
+    // Place `d` (references + text_pos set, value = measured): drive it through a new constraint
+    // when that solves, else keep it driven and say so. Opens the Modify box on a driving one when
+    // `open_editor`. Returns its index in m_dimensions.
+    int  place_smart_dimension(SketchDimension d, bool open_editor);
+    // Re-type a driving dimension: update its constraint and solve; a value the sketch cannot
+    // take is refused and the previous value restored. False when refused.
+    bool set_smart_dimension_value(int di, double v);
+    // Same (kind, references) as an existing annotation -> its index, else -1.
+    int  find_dimension(const SketchDimension& d) const;
+    // Replace-or-append by (kind, references), keeping a placed text position.
+    int  upsert_dimension(const SketchDimension& d);
+    SketchDimension dim_from_annot(const DimAnnot& a) const;
+    // The selection's dimension (V path) with a default text position clear of the geometry.
+    bool selection_smart_dim(SketchDimension& out) const;
+    // Is a live characteristic quote of `kind` on entity ei already a placed dimension?
+    bool entity_has_dimension(int ei, DimType kind) const;
+    SketchDimStyle dim_style(double unit_per_px) const;
+    void render_smart_dimensions(double unit_per_px, bool dark);
+    void draw_dim_layout(const SketchDimLayout& L, const ColorRGBA& col, double unit_per_px);
+    void draw_triangles(GLModel& model, const std::vector<std::array<Vec2d, 3>>& tris, const ColorRGBA& color);
+    void clear_smart_dim_picks();
+    // Clicks on placed dimension text, shared by Select and Dimension: LeftDown selects and arms
+    // a text drag, a drag moves text_pos, double-click opens the Modify box, right-click toggles
+    // driven/driving. Returns true when the event was a dimension-text gesture.
+    bool dimension_text_mouse(GLCanvas3D& canvas, const wxMouseEvent& evt);
+    // Per-entity defined state from the solver (SolidWorks colouring), refreshed by resolve_live.
+    void recompute_defined();
     // Representative plane-coords anchor of a dimension (label centre if known, else a
     // geometric midpoint/centre) — where the in-canvas value editor is positioned.
     Vec2d dim_anchor(const DimAnnot& a) const;
@@ -810,7 +863,7 @@ private:
     void drag_ellipsearc_handle(int ei, SketchPointRole role, const Vec2d& target);
     // Drop orientation constraints (H/V/Parallel/Perp/Angle/LockX/LockY) on entities in
     // [begin,end). A ROTATION makes inferred per-edge H/V inconsistent, so re-solving
-    // against them collapses the shape — drop them first (fixes up DimAnnot.con indices).
+    // against them collapses the shape — drop them first (re-indexes the dimensions).
     void drop_orientation_constraints(int begin, int end);
     // Drop every live constraint that references entity `ei` (Trim/Extend slide an endpoint,
     // invalidating its constraints) and fix the dimensions' cached constraint indices.
@@ -831,17 +884,14 @@ private:
     void drag_polygon_vertex(int fi, int ei, SketchPointRole role, const Vec2d& target);
     double measure_dim(const DimAnnot& a) const;                            // value from geometry
     std::string dimtype_title(DimType k) const;
-    SketchEntityConstraintDef constraint_for(const DimAnnot& a) const;      // driving def
-    // One driving constraint (and one visible quote) per kind+operands: re-typing a value must
-    // UPDATE it, not append a rival asking for something else. Both return the index.
+    // One driving constraint per kind+operands: re-typing a value must UPDATE it, not append a
+    // rival asking for something else. Returns the index.
     int upsert_constraint(const SketchEntityConstraintDef& c);
-    int upsert_dimension(const DimAnnot& a);
-    int  place_dimension(DimAnnot a);                                       // create+drive+notify
+    int  place_dimension(DimAnnot a);                // promote a live quote to a placed dimension
     std::string dim_text(const DimAnnot& a) const;                          // rendered label string
-    void render_dimensions(double unit_per_px);                            // quote lines + labels
     // Draw ONE dimension's quote (extension/dimension lines, arrowheads, label) and
     // return its label centre in out_label; false if the annot can't be drawn. Shared
-    // by render_dimensions (placed driving quotes) and render_live_quotes (live ones).
+    // by the live characteristic quotes (render_live_quotes).
     bool draw_dim_quote(const DimAnnot& a, double th, const ColorRGBA& col, Vec2d& out_label);
     // Live, non-driving characteristic quotes for the entity being edited (point/handle
     // drag, or a lone selection): the tool's defining dimensions shown Onshape-style so
@@ -949,7 +999,9 @@ private:
     // Index of the closed region containing plane-point p (point-in-polygon), or -1.
     int region_at(const Vec2d& p) const;
 
-    void draw_quad_strip(GLModel& model, const std::vector<Vec2d>& pts, bool closed, const ColorRGBA& color);
+    // hw: stroke half-width in plane units (0.3 = the normal sketch stroke).
+    void draw_quad_strip(GLModel& model, const std::vector<Vec2d>& pts, bool closed, const ColorRGBA& color,
+                         double hw = 0.3);
     // half_size is the square marker half-extent in PLANE units. Callers pass a
     // zoom-scaled value (k / zoom) for screen-constant handles; the default keeps
     // legacy point markers exactly as before.
@@ -1106,11 +1158,27 @@ private:
     int               m_dof{-1};          // remaining DoF; 0 = fully constrained, <0 = unknown
     bool              m_solve_ok{true};   // solver consistent (no conflicting constraints)
     std::vector<char> m_entity_conflict;  // per-entity flag: touched by a conflicting constraint
-    std::vector<DimAnnot> m_dimensions;           // placed dimension quotes (Mode::Dimension)
-    int                 m_dim_e0{-1};             // first picked point's entity (Dimension)
-    SketchPointRole     m_dim_r0{SketchPointRole::P0};
-    bool                m_dim_has0{false};        // a first point is pending
+    std::vector<SketchDimension> m_dimensions;    // placed Smart Dimension annotations
+    std::vector<Vec2d>  m_dim_label_pos;          // per m_dimensions: label centre, from the last render
     int                 m_pending_dim{-1};        // dim awaiting a value-card entry
+    // Smart Dimension gesture state (Mode::Dimension).
+    std::optional<SmartDimPick> m_sd_first;       // first pick held
+    std::optional<SmartDimPick> m_sd_second;      // second pick held
+    bool                m_sd_has_hover{false};    // something pickable under the cursor
+    SmartDimPick        m_sd_hover;
+    Vec2d               m_sd_hover_pt{0, 0};      // where the hover marker goes (a point pick)
+    bool                m_sd_has_cursor{false};
+    Vec2d               m_sd_cursor{0, 0};        // live preview follows this
+    // Dimension text drag / selection (Select and Dimension modes).
+    int                 m_dim_sel{-1};            // selected dimension (Delete removes it)
+    int                 m_dim_drag{-1};           // dimension whose text is grabbed
+    bool                m_dim_drag_moved{false};
+    Vec2d               m_dim_drag_off{0, 0};     // text_pos - grab point
+    int                 m_dim_press_x{0}, m_dim_press_y{0};
+    // Per-entity "fully defined" (1) / under-defined (0), valid when m_defined_valid.
+    std::vector<char>   m_entity_defined;
+    bool                m_defined_valid{false};
+    bool                m_defined_dirty{true};    // constraints/geometry changed: recompute lazily
     Mode                m_mode{Mode::Polyline};
     int                 m_sel_a{-1};   // picked segment endpoints (legacy Constrain mode)
     int                 m_sel_b{-1};

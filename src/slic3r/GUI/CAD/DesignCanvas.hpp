@@ -49,9 +49,19 @@ public:
     void begin_sketch(const SketchPlane& plane, DesignSketchTool::Mode mode);
     // Re-open a committed entity sketch for full in-canvas editing (load geometry +
     // constraints, re-detect feature groups). Re-commits via finish_sketch().
+    // When `entities` IS a document feature's own vector (DesignPanel passes f.entities), that
+    // feature's Smart Dimension annotations are restored too, and written back on commit.
     void edit_sketch(const std::vector<SketchEntity>& entities,
                      const std::vector<SketchEntityConstraintDef>& constraints,
                      const SketchPlane& plane);
+    void edit_sketch(const std::vector<SketchEntity>& entities,
+                     const std::vector<SketchEntityConstraintDef>& constraints,
+                     const SketchPlane& plane,
+                     const std::vector<SketchDimension>& dimensions);
+    // The live sketch's Smart Dimension annotations. While the entities-commit callback runs they
+    // are the committed sketch's, index-aligned with the constraints it was handed — store them
+    // with the feature (CadFeature::dimensions).
+    const std::vector<SketchDimension>& sketch_dimensions() const { return m_sketch_tool.dimensions(); }
     void set_sketch_tool(DesignSketchTool::Mode mode);
     void set_sketch_plane(const SketchPlane& plane);   // re-plane the live sketch when a reference plane is clicked in 3D
     void set_sketch_construction(bool c);
@@ -314,6 +324,7 @@ public:
     // whether any badge is on screen to talk about, nothing more.
     int                                 sketch_constraint_count() const;
     const std::vector<SketchEntityConstraintDef>& sketch_constraints() const;
+    const std::vector<SketchDimension>&           dimensions() const { return m_sketch_tool.dimensions(); }
     bool                                remove_sketch_constraint(int idx);
     void set_on_sketch_constraints_changed(std::function<void()> cb);
     bool try_add_sketch_constraints(const std::vector<SketchEntityConstraintDef>& defs);
@@ -389,6 +400,9 @@ private:
     const std::vector<CadBody>* m_color_bodies{nullptr};
 
     DesignSketchTool m_sketch_tool;
+    // Feature index of the sketch being re-edited, when edit_sketch could identify it; the commit
+    // writes the session's dimensions into it. -1 for a new sketch.
+    int              m_edit_feature{-1};
 
     // Section view: whether a horizontal clip is currently applied (guards Alt+Wheel). The cut
     // height and the named-view list live in DesignPanel; the canvas is a dumb applier.

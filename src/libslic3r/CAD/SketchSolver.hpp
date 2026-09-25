@@ -32,6 +32,16 @@ SketchSolveResult sketch_solve_drag(std::vector<SketchEntity>& entities,
                                     const std::vector<SketchEntityConstraintDef>& constraints,
                                     int dragged_ei, SketchPointRole dragged_role);
 
+// Per-entity "fully defined" state, the colour SolidWorks paints a sketch entity with: defined[i]
+// is 1 when every solver parameter of entity i (its points, and a circle's radius) is fixed by
+// `constraints`, 0 when some part of it can still move. Costs up to two extra solves of the
+// entity's connected component per point; a component solving with zero DOF costs none. Past
+// `max_ms` the remaining under-defined components are reported whole as 0 (conservative).
+// Returns false — and all zeros — when the sketch does not solve (over-defined / conflicting).
+bool sketch_entities_defined(const std::vector<SketchEntity>& entities,
+                             const std::vector<SketchEntityConstraintDef>& constraints,
+                             std::vector<char>& defined, double max_ms = 40.0);
+
 } // namespace Slic3r
 
 #endif

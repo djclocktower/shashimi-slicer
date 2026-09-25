@@ -46,7 +46,7 @@ VOL="${BUILD_VOL:-orcacad_kerneltest}"
 # third of the assertions, and a whole file could be added, tagged by its own convention, and
 # stay dark while the suite printed green. All 58 were passing; the coverage was simply never
 # exercised. Adding a tag here is now part of adding a test file.
-TAGS="${TAGS:-[CadDocument],[inference],[SketchEdit],[SketchConstraints],[SketchImport],[slvs]}"
+TAGS="${TAGS:-[CadDocument],[inference],[SketchEdit],[SketchConstraints],[SketchImport],[slvs],[SketchDimension]}"
 HOST=""
 
 while [[ $# -gt 0 ]]; do

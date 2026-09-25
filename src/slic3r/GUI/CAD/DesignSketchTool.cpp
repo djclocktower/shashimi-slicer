@@ -95,9 +95,13 @@ void DesignSketchTool::begin(const SketchPlane& plane, Mode mode)
     m_point_sel.clear();
     m_constraints.clear();
     m_dimensions.clear();
-    m_dim_has0 = false;
+    m_dim_label_pos.clear();
+    clear_smart_dim_picks();
+    m_dim_sel = -1;
+    m_dim_drag = -1;
     m_pending_dim = -1;
     m_dof = -1; m_solve_ok = true; m_entity_conflict.clear();
+    m_entity_defined.clear(); m_defined_valid = false;
     m_features.clear();
     m_open_feature = -1;
     m_active = true;
@@ -110,9 +114,21 @@ void DesignSketchTool::begin_edit(const std::vector<SketchEntity>& entities,
                                   const std::vector<SketchEntityConstraintDef>& constraints,
                                   const SketchPlane& plane)
 {
+    begin_edit(entities, constraints, plane, {});
+}
+
+void DesignSketchTool::begin_edit(const std::vector<SketchEntity>& entities,
+                                  const std::vector<SketchEntityConstraintDef>& constraints,
+                                  const SketchPlane& plane,
+                                  const std::vector<SketchDimension>& dimensions)
+{
     begin(plane, Mode::Select);
     m_entities    = entities;
     m_constraints = constraints;
+    m_dimensions  = dimensions;
+    // A recipe edited elsewhere (or written by a build with fewer entities) must not hand the
+    // renderer a dangling reference.
+    sketch_dimensions_sanitize(m_dimensions, int(m_entities.size()), int(m_constraints.size()));
     rebuild_features_from_entities();
     resolve_live();
 }
@@ -297,9 +313,9 @@ void DesignSketchTool::set_tool(Mode mode)
     // constraint or a dimension landing on geometry the user did not choose. Drop the modal
     // picks left armed by the tool we are leaving: the Dimension tool's first pick, the
     // Constrain tool's picks, and the individual point selection.
-    m_dim_has0 = false;
-    m_dim_e0   = -1;
-    m_dim_r0   = SketchPointRole::P0;
+    clear_smart_dim_picks();
+    m_dim_sel  = -1;
+    m_dim_drag = -1;
     m_pick0 = m_pick1 = m_pick2 = -1;
     m_point_sel.clear();
     m_selection.clear();
@@ -325,9 +341,13 @@ void DesignSketchTool::cancel()
     m_point_sel.clear();
     m_constraints.clear();
     m_dimensions.clear();
-    m_dim_has0 = false;
+    m_dim_label_pos.clear();
+    clear_smart_dim_picks();
+    m_dim_sel = -1;
+    m_dim_drag = -1;
     m_pending_dim = -1;
     m_dof = -1; m_solve_ok = true; m_entity_conflict.clear();
+    m_entity_defined.clear(); m_defined_valid = false;
     m_features.clear();
     m_open_feature = -1;
     reset_op();
@@ -338,6 +358,10 @@ void DesignSketchTool::cancel()
 // CadLevel::Gesture inside a sketch: drop the entity being drawn, keep the tool armed.
 bool DesignSketchTool::abort_gesture()
 {
+    if (m_sd_first) {                  // Smart Dimension: drop the held pick, stay in the tool
+        clear_smart_dim_picks();
+        return true;
+    }
     if (m_points.empty()) return false;
     m_points.clear();
     m_has_cursor = false;
@@ -382,15 +406,19 @@ void DesignSketchTool::request_undo_redo(bool redo)
 
 void DesignSketchTool::clear_selection()
 {
-    if (m_selection.empty() && m_point_sel.empty()) return;
+    if (m_selection.empty() && m_point_sel.empty() && m_dim_sel < 0) return;
     m_selection.clear();
     m_point_sel.clear();
+    m_dim_sel = -1;
     if (on_selection_changed) on_selection_changed(0);
 }
 
 void DesignSketchTool::delete_selected()
 {
-    if (m_selection.empty()) return;
+    if (m_selection.empty()) {
+        if (m_dim_sel >= 0) delete_dimension(m_dim_sel);   // Delete on a selected dimension
+        return;
+    }
     const int n = int(m_entities.size());
     std::vector<bool> del(n, false);
     for (int i : m_selection)
@@ -402,28 +430,33 @@ void DesignSketchTool::delete_selected()
         if (!del[i]) remap[i] = next++;
     for (int i = n - 1; i >= 0; --i)
         if (del[i]) m_entities.erase(m_entities.begin() + i);
-    // Drop constraints touching a deleted entity; remap the survivors.
+    // Drop constraints touching a deleted entity; remap the survivors. Negative references are
+    // the implicit origin/axes (or unset) and survive as they are — `map` used to turn the origin
+    // (-2) into -1, silently detaching every constraint to it.
     std::vector<SketchEntityConstraintDef> kept;
+    std::vector<int> cremap(m_constraints.size(), -1);
     auto live = [&](int e) { return e < 0 || (e < n && remap[e] >= 0); };
-    auto map  = [&](int e) { return e < 0 ? -1 : remap[e]; };
-    for (SketchEntityConstraintDef c : m_constraints) {
+    auto map  = [&](int e) { return e < 0 ? e : remap[e]; };
+    for (size_t ci = 0; ci < m_constraints.size(); ++ci) {
+        SketchEntityConstraintDef c = m_constraints[ci];
         if (!live(c.ea) || !live(c.eb) || !live(c.ec)) continue;
         c.ea = map(c.ea); c.eb = map(c.eb); c.ec = map(c.ec);
+        cremap[ci] = int(kept.size());
         kept.push_back(c);
     }
     m_constraints.swap(kept);
     m_selection.clear();
     m_point_sel.clear();
-    // v1: placed quotes reference entity indices that have shifted; drop them rather
-    // than risk a dangling reference (the driving constraints survive, reindexed).
-    m_dimensions.clear();
-    m_dim_has0 = false;
+    // Dimensions follow the same rules as the constraints: one on a deleted entity goes, the
+    // rest are re-indexed, and one whose driving constraint was dropped becomes driven.
+    sketch_dimensions_remap_constraints(m_dimensions, cremap);
+    sketch_dimensions_remap_entities(m_dimensions, remap);
+    m_dim_label_pos.clear();
+    m_dim_sel = -1;
+    m_dim_drag = -1;
     m_pending_dim = -1;
-    // The Dimension tool's pending FIRST pick is the same dangling-reference hazard as the placed
-    // quotes just cleared above: it references an entity index that has shifted or gone away, and
-    // a stale m_dim_e0 would dereference out of range on the next click. Drop it too.
-    m_dim_e0 = -1;
-    m_dim_r0 = SketchPointRole::P0;
+    // A pending Smart Dimension pick references an index that has shifted or gone away.
+    clear_smart_dim_picks();
 
     // FEATURE GROUPS hold [begin,end) ranges into m_entities, and every index past a deletion has
     // just moved. Left alone they point at other people's geometry: feature_of() then answers with
@@ -529,6 +562,11 @@ double DesignSketchTool::dimension_current() const
     case DimType::Diameter: return 2.0 * m_entities[m_selection[0]].radius;
     case DimType::Radius:   return m_entities[m_selection[0]].radius;
     case DimType::Angle: {
+        // The corner apply_angle_between turns: the angle between the arms leaving the shared
+        // vertex, which is what the dimension records and the value field shows.
+        SketchDimension d;
+        double v = 0.0;
+        if (selection_smart_dim(d) && measure_sketch_dimension(m_entities, d, v)) return v;
         const auto& a = m_entities[m_selection[0]];
         const auto& b = m_entities[m_selection[1]];
         const Vec2d da = a.p1 - a.p0, db = b.p1 - b.p0;
@@ -649,58 +687,40 @@ void DesignSketchTool::apply_dimension(double v)
     }
     default: break;
     }
-    record_dimension_constraint(v);          // store a driving constraint for this dimension
+    const int di = record_dimension_constraint(v);   // driving constraint + its annotation
     resolve_live();                          // live-solve so the viewport shows the solved sketch
+    // Over-defined: keep the number on screen as a driven (reference) dimension, as SolidWorks
+    // does, instead of leaving the sketch unsolvable.
+    if (!m_solve_ok && di >= 0 && di < int(m_dimensions.size()) && !m_dimensions[di].driven) {
+        toggle_dimension_driven(di);
+        if (on_status_message) on_status_message("Dimension made driven: it would over-define the sketch");
+    }
     m_selection.clear();
     if (on_selection_changed) on_selection_changed(0);
 }
 
-// Append the SketchEntityConstraintDef that makes the just-applied dimension a
-// driving constraint (enforced by the kernel live and at commit). DistanceToLine
-// records a PointOnLine constraint so "centre onto axis" persists through re-solve.
-void DesignSketchTool::record_dimension_constraint(double v)
+// Record the driving constraint for the just-applied selection dimension, and its annotation
+// (placed a little off the geometry, see selection_smart_dim). The constraint goes through the
+// kernel's sketch_dimension_constraint, so an angle is stored in RADIANS like every other
+// angle the solver sees. Re-typing the same dimension updates it in place. Returns the
+// annotation's index, or -1 when the selection has no dimension.
+int DesignSketchTool::record_dimension_constraint(double v)
 {
-    const DimType k = dimension_kind();
-    auto role = [&](int i) {
-        return (m_entities[i].type == SketchEntity::Type::Point) ? SketchPointRole::P0
-                                                                 : SketchPointRole::Center;
-    };
-    SketchEntityConstraintDef c;
-    switch (k) {
-    case DimType::Length:
-        c.type = SketchConstraintType::Distance;
-        c.ea = m_selection[0]; c.ra = SketchPointRole::P0;
-        c.eb = m_selection[0]; c.rb = SketchPointRole::P1;
-        c.value = v; m_constraints.push_back(c); break;
-    case DimType::Diameter:
-        c.type = SketchConstraintType::Diameter; c.ea = m_selection[0]; c.value = v;
-        m_constraints.push_back(c); break;
-    case DimType::Radius:
-        c.type = SketchConstraintType::Radius; c.ea = m_selection[0]; c.value = v;
-        m_constraints.push_back(c); break;
-    case DimType::Angle:
-        c.type = SketchConstraintType::Angle;
-        c.ea = m_selection[0]; c.eb = m_selection[1]; c.value = v;
-        m_constraints.push_back(c); break;
-    case DimType::Distance: {
-        const int ia = m_selection[0], ib = m_selection[1];
-        if (v < 1e-9) c.type = SketchConstraintType::Coincident;
-        else        { c.type = SketchConstraintType::Distance; c.value = v; }
-        c.ea = ia; c.ra = role(ia); c.eb = ib; c.rb = role(ib);
-        m_constraints.push_back(c); break;
+    SketchDimension d;
+    if (!selection_smart_dim(d)) return -1;
+    const std::optional<SketchEntityConstraintDef> c = sketch_dimension_constraint(m_entities, d, v);
+    if (!c) return -1;
+    d.value  = v;
+    d.driven = false;
+    const int existing = find_dimension(d);
+    if (existing >= 0 && !m_dimensions[existing].driven &&
+        m_dimensions[existing].constraint >= 0 && m_dimensions[existing].constraint < int(m_constraints.size())) {
+        m_constraints[m_dimensions[existing].constraint] = *c;
+        m_dimensions[existing].value = v;
+        return existing;
     }
-    case DimType::DistanceToLine: {
-        // Point-on-line driving constraint: hold the point-like entity at unsigned
-        // perpendicular distance v from the line (v == 0 -> on the axis).
-        const bool aLine = (m_entities[m_selection[0]].type == SketchEntity::Type::Line);
-        const int ip = m_selection[aLine ? 1 : 0];   // point-like (Point/Circle/Arc)
-        const int il = m_selection[aLine ? 0 : 1];   // line
-        c.type = SketchConstraintType::PointOnLine;
-        c.ea = ip; c.ra = role(ip); c.eb = il; c.value = v;
-        m_constraints.push_back(c); break;
-    }
-    default: break;   // None: no driving constraint recorded
-    }
+    d.constraint = upsert_constraint(*c);
+    return upsert_dimension(d);
 }
 
 // Onshape-style live solve: enforce all accumulated driving constraints on the
@@ -751,7 +771,20 @@ void DesignSketchTool::resolve_live_drag(int dragged_ei, SketchPointRole dragged
     } else {
         m_dof = -1; m_solve_ok = true;
     }
+    // Per-entity defined state is recomputed lazily (render) once the gesture settles: a drag
+    // changes positions, not which parameters the constraints pin.
+    if (dragged_ei < 0) m_defined_dirty = true;
     if (on_solve_state) on_solve_state(m_dof, m_solve_ok, has);
+}
+
+void DesignSketchTool::recompute_defined()
+{
+    m_defined_dirty = false;
+    m_defined_valid = sketch_entities_defined(m_entities, m_constraints, m_entity_defined);
+    if (m_entity_defined.size() != m_entities.size()) {
+        m_entity_defined.assign(m_entities.size(), 0);
+        m_defined_valid = false;
+    }
 }
 
 // ---- Onshape-style visual editing: feature grouping + handles -----------------
@@ -1113,67 +1146,361 @@ int DesignSketchTool::upsert_constraint(const SketchEntityConstraintDef& c)
     return int(m_constraints.size()) - 1;
 }
 
-// The same rule for the visible annotation: one quote per (kind, operands), so repeated edits
-// do not stack labels on top of each other reading different values.
-int DesignSketchTool::upsert_dimension(const DimAnnot& a)
+// Same (kind, references) as a placed annotation. Symmetric kinds match either order; an angle
+// also matches on its sector, since the other sectors are other dimensions of the same lines.
+int DesignSketchTool::find_dimension(const SketchDimension& d) const
 {
+    using K = SketchDimKind;
+    const bool symmetric = d.kind == K::PointPoint || d.kind == K::Horizontal ||
+                           d.kind == K::Vertical   || d.kind == K::LineLine;
     for (int i = 0; i < int(m_dimensions.size()); ++i) {
-        const DimAnnot& o = m_dimensions[i];
-        if (o.kind == a.kind && ((o.ea == a.ea && o.eb == a.eb) || (o.ea == a.eb && o.eb == a.ea))) {
-            const Vec2d keep = m_dimensions[i].label_pos;   // don't teleport a placed label
-            m_dimensions[i] = a;
-            m_dimensions[i].label_pos = keep;
+        const SketchDimension& o = m_dimensions[i];
+        if (o.kind != d.kind) continue;
+        if (d.kind == K::Angle && o.sector != d.sector) continue;
+        const bool same = o.ea == d.ea && o.eb == d.eb && o.ra == d.ra && o.rb == d.rb;
+        const bool swap = symmetric && o.ea == d.eb && o.eb == d.ea && o.ra == d.rb && o.rb == d.ra;
+        if (d.kind == K::Length || d.kind == K::Diameter || d.kind == K::Radius) {
+            if (o.ea == d.ea) return i;
+        } else if (same || swap) {
             return i;
         }
     }
-    m_dimensions.push_back(a);
+    return -1;
+}
+
+// One visible annotation per (kind, references): re-typing a value UPDATES it rather than
+// stacking labels that read different values. A placed text position is kept.
+int DesignSketchTool::upsert_dimension(const SketchDimension& d)
+{
+    const int i = find_dimension(d);
+    if (i >= 0) {
+        const Vec2d keep = m_dimensions[i].text_pos;
+        m_dimensions[i] = d;
+        m_dimensions[i].text_pos = keep;
+        return i;
+    }
+    m_dimensions.push_back(d);
     return int(m_dimensions.size()) - 1;
 }
 
-SketchEntityConstraintDef DesignSketchTool::constraint_for(const DimAnnot& a) const
+SketchDimension DesignSketchTool::dim_from_annot(const DimAnnot& a) const
 {
-    SketchEntityConstraintDef c;
+    using K = SketchDimKind;
+    SketchDimension d;
+    d.ea = a.ea; d.ra = a.ra;
+    d.eb = a.eb; d.rb = a.rb;
     switch (a.kind) {
-    case DimType::Length:
-        c.type = SketchConstraintType::Distance;
-        c.ea = a.ea; c.ra = SketchPointRole::P0;
-        c.eb = a.ea; c.rb = SketchPointRole::P1; c.value = a.value;
-        break;
-    case DimType::Diameter: c.type = SketchConstraintType::Diameter; c.ea = a.ea; c.value = a.value; break;
-    case DimType::Radius:   c.type = SketchConstraintType::Radius;   c.ea = a.ea; c.value = a.value; break;
-    case DimType::Distance:
-        if (a.value < 1e-9) c.type = SketchConstraintType::Coincident;
-        else              { c.type = SketchConstraintType::Distance; c.value = a.value; }
-        c.ea = a.ea; c.ra = a.ra; c.eb = a.eb; c.rb = a.rb;
-        break;
-    case DimType::DistanceToLine:
-        c.type = SketchConstraintType::PointOnLine;
-        c.ea = a.ea; c.ra = a.ra; c.eb = a.eb; c.value = a.value;
-        break;
+    case DimType::Length:         d.kind = K::Length; d.eb = a.ea; d.ra = SketchPointRole::P0; d.rb = SketchPointRole::P1; break;
+    case DimType::Diameter:       d.kind = K::Diameter; d.eb = -1; break;
+    case DimType::Radius:         d.kind = K::Radius;   d.eb = -1; break;
+    case DimType::Distance:       d.kind = K::PointPoint; break;
+    case DimType::DistanceToLine: d.kind = K::PointLine;  break;
+    case DimType::Angle:          d.kind = K::Angle;      break;   // two lines only (eb >= 0)
     default: break;
     }
-    return c;
+    // The live quote's label is where the user saw the number: keep the text there.
+    d.text_pos = (a.label_pos.squaredNorm() < 1e30) ? a.label_pos : dim_anchor(a);
+    return d;
 }
 
-// Measure the just-picked dimension, append its driving constraint, live-solve, and
-// fire the value-card callback so the user can override the value.
+bool DesignSketchTool::entity_has_dimension(int ei, DimType kind) const
+{
+    using K = SketchDimKind;
+    for (const SketchDimension& d : m_dimensions) {
+        if (d.ea != ei) continue;
+        switch (kind) {
+        case DimType::Length:
+            if (d.kind == K::Length || ((d.kind == K::Horizontal || d.kind == K::Vertical) && d.eb == ei))
+                return true;
+            break;
+        case DimType::Radius:
+        case DimType::Diameter:
+            if (d.kind == K::Radius || d.kind == K::Diameter) return true;
+            break;
+        default: break;
+        }
+    }
+    return false;
+}
+
+// Promote a live characteristic quote to a placed dimension and open its Modify box. Same path
+// as a Smart Dimension click, with the quote's label as the text position.
 int DesignSketchTool::place_dimension(DimAnnot a)
 {
-    a.value = measure_dim(a);
-    a.con   = upsert_constraint(constraint_for(a));
-    const int di = upsert_dimension(a);
-    resolve_live();
-    open_value_editor(di);
-    return m_pending_dim;
+    SketchDimension d = dim_from_annot(a);
+    double v = 0.0;
+    if (!measure_sketch_dimension(m_entities, d, v)) return -1;
+    d.value = v;
+    const int existing = find_dimension(d);
+    if (existing >= 0) {
+        open_value_editor(existing);
+        return existing;
+    }
+    return place_smart_dimension(d, true);
 }
 
-// Nearest placed-dimension label within tol (uses the centre cached by render).
+// Is there already a constraint of this type on these operands (either order)?
+static int find_equivalent_constraint(const std::vector<SketchEntityConstraintDef>& cons,
+                                      const SketchEntityConstraintDef& c)
+{
+    for (int i = 0; i < int(cons.size()); ++i) {
+        const SketchEntityConstraintDef& o = cons[i];
+        if (o.type != c.type || o.ec != c.ec) continue;
+        if ((o.ea == c.ea && o.ra == c.ra && o.eb == c.eb && o.rb == c.rb) ||
+            (o.ea == c.eb && o.ra == c.rb && o.eb == c.ea && o.rb == c.ra))
+            return i;
+    }
+    return -1;
+}
+
+int DesignSketchTool::place_smart_dimension(SketchDimension d, bool open_editor)
+{
+    const int existing = find_dimension(d);
+    if (existing >= 0) {
+        // Dimensioning the same thing again moves the one that is there, the way re-placing a
+        // SolidWorks dimension does, rather than stacking a rival.
+        m_dimensions[existing].text_pos = d.text_pos;
+        if (open_editor && !m_dimensions[existing].driven) open_value_editor(existing);
+        return existing;
+    }
+    d.driven     = true;
+    d.constraint = -1;
+    const std::optional<SketchEntityConstraintDef> c = sketch_dimension_constraint(m_entities, d, d.value);
+    std::string why;
+    if (!c) {
+        why = "Dimension made driven: its value cannot drive this geometry";
+    } else {
+        // A constraint the sketch already carries with no annotation (a length typed while
+        // drawing, a constraint button) is ADOPTED: it is this dimension, just not shown yet.
+        const int same = find_equivalent_constraint(m_constraints, *c);
+        bool owned = false;
+        for (const SketchDimension& o : m_dimensions)
+            if (!o.driven && o.constraint == same) owned = true;
+        if (same >= 0 && !owned) {
+            d.driven     = false;
+            d.constraint = same;
+        } else if (try_add_constraints({*c})) {
+            d.driven     = false;
+            d.constraint = int(m_constraints.size()) - 1;
+        } else {
+            why = "Dimension made driven: it would over-define the sketch";
+        }
+    }
+    m_dimensions.push_back(d);
+    const int di = int(m_dimensions.size()) - 1;
+    resolve_live();
+    if (!why.empty() && on_status_message) on_status_message(why);
+    if (open_editor && !d.driven) open_value_editor(di);
+    return di;
+}
+
+bool DesignSketchTool::set_smart_dimension_value(int di, double v)
+{
+    if (di < 0 || di >= int(m_dimensions.size())) return false;
+    SketchDimension& d = m_dimensions[di];
+    if (d.driven || d.constraint < 0 || d.constraint >= int(m_constraints.size())) return false;
+    const std::optional<SketchEntityConstraintDef> c = sketch_dimension_constraint(m_entities, d, v);
+    if (!c) {
+        if (on_status_message) on_status_message("That value is not valid for this dimension");
+        return false;
+    }
+    const SketchEntityConstraintDef prev = m_constraints[d.constraint];
+    m_constraints[d.constraint] = *c;
+    // A failed solve leaves the geometry untouched (SketchSolver writes back only on success),
+    // so refusing the value is just restoring the constraint.
+    if (!sketch_solve(m_entities, m_constraints).ok) {
+        m_constraints[d.constraint] = prev;
+        resolve_live();
+        if (on_status_message) on_status_message("The sketch cannot take that value; the dimension keeps its old one");
+        return false;
+    }
+    d.value = v;
+    resolve_live();
+    if (on_constraints_changed) on_constraints_changed();
+    return true;
+}
+
+bool DesignSketchTool::toggle_dimension_driven(int di)
+{
+    if (di < 0 || di >= int(m_dimensions.size())) return false;
+    SketchDimension& d = m_dimensions[di];
+    if (d.driven) {
+        double v = 0.0;
+        if (!measure_sketch_dimension(m_entities, d, v)) return false;
+        const std::optional<SketchEntityConstraintDef> c = sketch_dimension_constraint(m_entities, d, v);
+        if (!c || !try_add_constraints({*c})) {
+            if (on_status_message) on_status_message("Dimension stays driven: it would over-define the sketch");
+            return false;
+        }
+        d.driven     = false;
+        d.constraint = int(m_constraints.size()) - 1;
+        d.value      = v;
+        resolve_live();
+        return true;
+    }
+    const int ci = d.constraint;
+    d.driven     = true;
+    d.constraint = -1;
+    if (ci >= 0 && ci < int(m_constraints.size())) remove_constraint(ci);   // re-indexes the rest
+    else                                           resolve_live();
+    return true;
+}
+
+bool DesignSketchTool::delete_dimension(int di)
+{
+    if (di < 0 || di >= int(m_dimensions.size())) return false;
+    const int ci = m_dimensions[di].driven ? -1 : m_dimensions[di].constraint;
+    m_dimensions.erase(m_dimensions.begin() + di);
+    if (di < int(m_dim_label_pos.size())) m_dim_label_pos.erase(m_dim_label_pos.begin() + di);
+    m_dim_sel  = -1;
+    m_dim_drag = -1;
+    if (m_pending_dim == di)     m_pending_dim = -1;
+    else if (m_pending_dim > di) --m_pending_dim;
+    if (ci >= 0 && ci < int(m_constraints.size())) remove_constraint(ci);   // a driving one frees its geometry
+    else                                           resolve_live();
+    if (on_selection_changed) on_selection_changed(int(m_selection.size() + m_point_sel.size()));
+    return true;
+}
+
+void DesignSketchTool::clear_smart_dim_picks()
+{
+    m_sd_first.reset();
+    m_sd_second.reset();
+    m_sd_has_hover = false;
+}
+
+// What a Smart Dimension click would take. Precedence follows the selection pick: a point (an
+// endpoint, a centre, a Point entity) beats the curve it lies on, then the sketch origin, then an
+// edge. A midpoint sits on its edge and picks the line. Ellipses and splines have no single
+// dimension of their own; their points still pick.
+bool DesignSketchTool::smart_pick_at(const Vec2d& p, double tol, SmartDimPick& out, Vec2d& marker) const
+{
+    int ei = -1;
+    SketchPointRole role = SketchPointRole::P0;
+    if (hit_test_point(p, tol, ei, role) && point_at(ei, role, marker)) {
+        out = SmartDimPick::at(ei, role);
+        return true;
+    }
+    if (p.norm() <= tol) {
+        out    = SmartDimPick::whole(kSketchRefOrigin);
+        marker = Vec2d::Zero();
+        return true;
+    }
+    const int hit = hit_test(p, tol);
+    if (hit < 0) return false;
+    switch (m_entities[hit].type) {
+    case SketchEntity::Type::Line:
+    case SketchEntity::Type::Circle:
+    case SketchEntity::Type::Arc:
+        out    = SmartDimPick::whole(hit);
+        marker = p;
+        return true;
+    case SketchEntity::Type::Point:
+        out    = SmartDimPick::at(hit, SketchPointRole::P0);
+        marker = m_entities[hit].p0;
+        return true;
+    default:
+        return false;
+    }
+}
+
+// The V path's dimension: the selection names the references, and a text position a little off
+// the geometry stands in for the placement click. The position is chosen inside the zone that
+// gives the dimension dimension_kind() promises (aligned for a length or a distance, the corner
+// apply_angle_between turns for an angle).
+bool DesignSketchTool::selection_smart_dim(SketchDimension& out) const
+{
+    if (!selection_valid()) return false;
+    const DimType k = dimension_kind();
+    auto whole_or_point = [&](int ei) {
+        return m_entities[ei].type == SketchEntity::Type::Point ? SmartDimPick::at(ei, SketchPointRole::P0)
+                                                                : SmartDimPick::whole(ei);
+    };
+    SmartDimResolution r;
+    switch (k) {
+    case DimType::Length: {
+        const SketchEntity& e = m_entities[m_selection[0]];
+        const Vec2d d = e.p1 - e.p0;
+        const double L = d.norm();
+        if (L < 1e-9) return false;
+        const Vec2d n(-d.y() / L, d.x() / L);
+        r = resolve_smart_dimension(m_entities, SmartDimPick::whole(m_selection[0]), std::nullopt,
+                                    0.5 * (e.p0 + e.p1) + n * std::max(0.15 * L, 3.0));
+        break;
+    }
+    case DimType::Diameter:
+    case DimType::Radius: {
+        const SketchEntity& e = m_entities[m_selection[0]];
+        double a = 0.25 * M_PI;
+        if (e.type == SketchEntity::Type::Arc) a = 0.5 * (e.start_angle + e.end_angle);
+        r = resolve_smart_dimension(m_entities, SmartDimPick::whole(m_selection[0]), std::nullopt,
+                                    e.center + 1.4 * e.radius * Vec2d(std::cos(a), std::sin(a)));
+        break;
+    }
+    case DimType::Angle: {
+        const SketchEntity& A = m_entities[m_selection[0]];
+        const SketchEntity& B = m_entities[m_selection[1]];
+        const Vec2d aE[2] = { A.p0, A.p1 }, bE[2] = { B.p0, B.p1 };
+        int si = -1, sj = -1;
+        double best = 1e-6;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                if ((aE[i] - bE[j]).squaredNorm() < best) { best = (aE[i] - bE[j]).squaredNorm(); si = i; sj = j; }
+        Vec2d armA = A.p1 - A.p0, armB = B.p1 - B.p0, pivot = B.p0;
+        if (si >= 0) { pivot = aE[si]; armA = aE[1 - si] - pivot; armB = bE[1 - sj] - pivot; }
+        if (armA.norm() < 1e-9 || armB.norm() < 1e-9) return false;
+        const Vec2d bis = armA.normalized() + armB.normalized();
+        if (bis.norm() < 1e-9) return false;
+        // Intersection of the two lines (the pivot when they share it).
+        const Vec2d dA = A.p1 - A.p0, dB = B.p1 - B.p0;
+        const double den = dA.x() * dB.y() - dA.y() * dB.x();
+        if (std::abs(den) < 1e-12) return false;
+        const Vec2d w = B.p0 - A.p0;
+        const Vec2d X = si >= 0 ? pivot : Vec2d(A.p0 + dA * ((w.x() * dB.y() - w.y() * dB.x()) / den));
+        const double rho = 0.35 * std::min(dA.norm(), dB.norm());
+        r = resolve_smart_dimension(m_entities, SmartDimPick::whole(m_selection[0]),
+                                    SmartDimPick::whole(m_selection[1]), X + bis.normalized() * std::max(rho, 2.0));
+        if (r.ok && r.dim.kind != SketchDimKind::Angle) return false;
+        break;
+    }
+    case DimType::Distance: {
+        Vec2d pa(0, 0), pb(0, 0);
+        entity_ref_point(m_entities[m_selection[0]], pa);
+        entity_ref_point(m_entities[m_selection[1]], pb);
+        const Vec2d d = pb - pa;
+        const double L = d.norm();
+        if (L < 1e-9) return false;
+        const Vec2d n(-d.y() / L, d.x() / L);
+        r = resolve_smart_dimension(m_entities, whole_or_point(m_selection[0]), whole_or_point(m_selection[1]),
+                                    0.5 * (pa + pb) + n * std::max(0.15 * L, 3.0));
+        break;
+    }
+    case DimType::DistanceToLine: {
+        const bool aLine = m_entities[m_selection[0]].type == SketchEntity::Type::Line;
+        const int il = m_selection[aLine ? 0 : 1], ip = m_selection[aLine ? 1 : 0];
+        const SketchEntity& L = m_entities[il];
+        Vec2d rp(0, 0);
+        entity_ref_point(m_entities[ip], rp);
+        const Vec2d u = (L.p1 - L.p0).normalized();
+        const Vec2d foot = L.p0 + u * (rp - L.p0).dot(u);
+        r = resolve_smart_dimension(m_entities, whole_or_point(ip), SmartDimPick::whole(il),
+                                    0.5 * (rp + foot) + u * std::max(0.1 * (rp - foot).norm(), 3.0));
+        break;
+    }
+    default: return false;
+    }
+    if (!r.ok) return false;
+    out = r.dim;
+    return true;
+}
+
+// Nearest placed-dimension label within tol (label centres cached by the last render).
 int DesignSketchTool::hit_test_dimension(const Vec2d& p, double tol) const
 {
     double best = tol;
     int bi = -1;
-    for (size_t i = 0; i < m_dimensions.size(); ++i) {
-        const double d = (m_dimensions[i].label_pos - p).norm();
+    for (size_t i = 0; i < m_dimensions.size() && i < m_dim_label_pos.size(); ++i) {
+        const double d = (m_dim_label_pos[i] - p).norm();
         if (d < best) { best = d; bi = int(i); }
     }
     return bi;
@@ -1208,27 +1535,46 @@ Vec2d DesignSketchTool::dim_anchor(const DimAnnot& a) const
 // to screen pixels and hands the host (DesignCanvas) a commit/cancel pair that drive
 // the value through the existing set/cancel_dimension_value path. Falls back to the
 // modal pick-complete callback when no inline-edit host is wired.
+// The Modify box. Only a DRIVING dimension has a value to type; a driven one is a measurement.
 void DesignSketchTool::open_value_editor(int di)
 {
     if (di < 0 || di >= int(m_dimensions.size())) return;
-    m_pending_dim = di;
-    if (!on_inline_edit) {
-        if (on_dimension_pick_complete) on_dimension_pick_complete(m_dimensions[di].value);
+    const SketchDimension& d = m_dimensions[di];
+    if (d.driven) {
+        if (on_status_message) on_status_message("A driven dimension only measures: right-click it to make it driving");
         return;
     }
-    const DimAnnot& a = m_dimensions[di];
-    // Anchor the field OVER the dimension (project its label/anchor to the viewport), same as
-    // the draw-then-edit tools and Constrain mode; fall back to the click point if it projects
+    double v = d.value;
+    measure_sketch_dimension(m_entities, d, v);
+    m_pending_dim = di;
+    if (!on_inline_edit) {
+        if (on_dimension_pick_complete) on_dimension_pick_complete(v);
+        return;
+    }
+    // Anchor the field OVER the dimension text; fall back to the click point if it projects
     // off-screen.
     wxPoint px(m_last_mouse_x, m_last_mouse_y);
     const Camera& cam = wxGetApp().plater()->get_camera();
-    const wxPoint lp = world_to_screen_px(cam, m_plane.to_world(dim_anchor(a)));
+    const Vec2d at = di < int(m_dim_label_pos.size()) && m_dim_label_pos[di].squaredNorm() < 1e30
+                   ? m_dim_label_pos[di] : d.text_pos;
+    const wxPoint lp = world_to_screen_px(cam, m_plane.to_world(at));
     const std::array<int, 4>& vp = cam.get_viewport();
     if (lp.x >= vp[0] && lp.y >= vp[1] && lp.x <= vp[0] + vp[2] && lp.y <= vp[1] + vp[3])
         px = lp;
-    on_inline_edit(px, a.value, dimtype_title(a.kind),
-                   [this](double v) { set_dimension_value(v); },
-                   [this]()         { cancel_dimension_value(); });
+    const char* title = "Value";
+    switch (d.kind) {
+    case SketchDimKind::Length:     title = "Length";     break;
+    case SketchDimKind::Horizontal: title = "Horizontal"; break;
+    case SketchDimKind::Vertical:   title = "Vertical";   break;
+    case SketchDimKind::Diameter:   title = "Diameter";   break;
+    case SketchDimKind::Radius:     title = "Radius";     break;
+    case SketchDimKind::Angle:      title = "Angle";      break;
+    default:                        title = "Distance";   break;
+    }
+    // Enter drives the typed value; Esc keeps the measured one, which is already driving.
+    on_inline_edit(px, v, title,
+                   [this](double nv) { set_dimension_value(nv); },
+                   [this]()          { cancel_dimension_value(); });
 }
 
 // In-canvas editor for a line's angle-to-horizontal. Unlike length/radius, a single
@@ -1422,10 +1768,20 @@ void DesignSketchTool::open_primary_autoedit()
         DimAnnot a = q;
         a.value = measure_dim(a);
         m_autoedit_dims.push_back({ a.label_pos, a.value,
-            [this, a](double v) mutable {
-                a.value = v;
-                a.con   = upsert_constraint(constraint_for(a));
-                upsert_dimension(a);
+            [this, a](double v) {
+                // The typed value becomes a placed, driving dimension at the quote's label.
+                SketchDimension d = dim_from_annot(a);
+                const int existing = find_dimension(d);
+                if (existing >= 0 && !m_dimensions[existing].driven) {
+                    set_smart_dimension_value(existing, v);
+                    return;
+                }
+                const std::optional<SketchEntityConstraintDef> c = sketch_dimension_constraint(m_entities, d, v);
+                if (!c) return;
+                d.value      = v;
+                d.driven     = false;
+                d.constraint = upsert_constraint(*c);
+                upsert_dimension(d);
                 resolve_live();
             }, { a.ea, a.eb }, dimtype_title(a.kind) });
     }
@@ -1575,8 +1931,8 @@ void DesignSketchTool::drop_orientation_constraints(int begin, int end)
     }
     if (kept.size() == m_constraints.size()) return;             // nothing dropped
     m_constraints.swap(kept);
-    for (DimAnnot& a : m_dimensions)                              // fix cached con indices
-        if (a.con >= 0) a.con = (a.con < int(remap.size())) ? remap[a.con] : -1;
+    sketch_dimensions_remap_constraints(m_dimensions, remap);     // a dropped one's dim turns driven
+    m_defined_dirty = true;
 }
 
 void DesignSketchTool::drop_constraints_referencing(int ei)
@@ -1592,8 +1948,8 @@ void DesignSketchTool::drop_constraints_referencing(int ei)
     }
     if (kept.size() == m_constraints.size()) return;
     m_constraints.swap(kept);
-    for (DimAnnot& a : m_dimensions)
-        if (a.con >= 0) a.con = (a.con < int(remap.size())) ? remap[a.con] : -1;
+    sketch_dimensions_remap_constraints(m_dimensions, remap);
+    m_defined_dirty = true;
 }
 
 // Onshape scissors on the live sketch: cut the picked entity at its nearest intersection.
@@ -2156,19 +2512,27 @@ void DesignSketchTool::drag_slot_handle(int fi, const Vec2d& cursor)
 
 DesignSketchTool::DimType DesignSketchTool::pending_dimension_type() const
 {
-    return (m_pending_dim >= 0 && m_pending_dim < int(m_dimensions.size()))
-               ? m_dimensions[m_pending_dim].kind : DimType::None;
+    if (m_pending_dim < 0 || m_pending_dim >= int(m_dimensions.size())) return DimType::None;
+    switch (m_dimensions[m_pending_dim].kind) {
+    case SketchDimKind::Length:
+    case SketchDimKind::Horizontal:
+    case SketchDimKind::Vertical:   return DimType::Length;
+    case SketchDimKind::Diameter:   return DimType::Diameter;
+    case SketchDimKind::Radius:     return DimType::Radius;
+    case SketchDimKind::Angle:      return DimType::Angle;
+    case SketchDimKind::PointPoint: return DimType::Distance;
+    case SketchDimKind::PointLine:
+    case SketchDimKind::LineLine:   return DimType::DistanceToLine;
+    }
+    return DimType::None;
 }
 
 void DesignSketchTool::set_dimension_value(double v)
 {
     if (m_pending_dim < 0 || m_pending_dim >= int(m_dimensions.size())) return;
-    DimAnnot& a = m_dimensions[m_pending_dim];
-    a.value = v;
-    if (a.con >= 0 && a.con < int(m_constraints.size()))
-        m_constraints[a.con] = constraint_for(a);
-    resolve_live();
+    const int di = m_pending_dim;
     m_pending_dim = -1;
+    set_smart_dimension_value(di, v);
 }
 
 void DesignSketchTool::cancel_dimension_value()
@@ -2244,19 +2608,27 @@ void DesignSketchTool::finish()
     std::vector<SketchEntity> ents = m_entities;
     std::vector<SketchEntityConstraintDef> cons = m_constraints;
     SketchPlane pl = m_plane;
+    // Driven values are measurements: store what the sketch measures as it is committed.
+    for (SketchDimension& d : m_dimensions)
+        if (d.driven) measure_sketch_dimension(m_entities, d, d.value);
     m_active = false;
     m_points.clear();
     m_entities.clear();
     m_constraints.clear();
-    m_dimensions.clear();
     m_point_sel.clear();
-    m_dim_has0 = false;
+    clear_smart_dim_picks();
+    m_dim_sel = -1;
+    m_dim_drag = -1;
     m_pending_dim = -1;
     m_has_cursor = false;
     m_features.clear();
     m_open_feature = -1;
+    // m_dimensions stays readable through dimensions() while the commit handler runs: it is the
+    // annotation set of the sketch being committed, index-aligned with `cons`.
     if (cb)
         cb(ents, cons, pl);
+    m_dimensions.clear();
+    m_dim_label_pos.clear();
 }
 
 void DesignSketchTool::begin_constrain(const SketchProfile& prof, const SketchPlane& plane)
@@ -2402,6 +2774,7 @@ bool DesignSketchTool::try_add_constraints(const std::vector<SketchEntityConstra
     const size_t mark = m_constraints.size();
     for (const auto& c : cands) m_constraints.push_back(c);
     if (solve_sketch_entities(m_entities, m_constraints)) {
+        m_defined_dirty = true;
         if (on_constraints_changed) on_constraints_changed();
         return true;
     }
@@ -2432,6 +2805,7 @@ bool DesignSketchTool::remove_constraint(int idx)
 {
     if (idx < 0 || idx >= int(m_constraints.size())) return false;
     m_constraints.erase(m_constraints.begin() + idx);
+    sketch_dimensions_erase_constraint(m_dimensions, idx);   // its dimension, if any, turns driven
     // resolve_live(), not a bare solve: it is the path that recomputes the DoF, clears the
     // per-entity conflict flags and fires on_solve_state. Solving directly would relax the
     // geometry while leaving the DoF readout and any red over-constrained tint stale — the
@@ -6586,17 +6960,16 @@ static std::vector<std::vector<Vec2d>> dash_polyline(const std::vector<Vec2d>& p
     return out;
 }
 
-void DesignSketchTool::draw_quad_strip(GLModel& model, const std::vector<Vec2d>& pts, bool closed, const ColorRGBA& color)
+void DesignSketchTool::draw_quad_strip(GLModel& model, const std::vector<Vec2d>& pts, bool closed, const ColorRGBA& color,
+                                       double hw)
 {
     if (pts.size() < 2)
         return;
 
-    // Half-width in WORLD units, so a stroke is 2*hw mm wide on the plane. Halved from 0.6 on
-    // user report 2026-08-23: at 1.2 mm the orange under-constrained line was heavy enough to
-    // swallow a short segment and to hide which of two near-parallel lines the cursor was on.
-    // Every one of this function's call sites is a sketch stroke (entities, previews, rubber
-    // bands), which is why the constant is here and not a parameter at twenty call sites.
-    const double hw = 0.3;
+    // hw: half-width in WORLD units, so a stroke is 2*hw mm wide on the plane. The default 0.3
+    // was halved from 0.6 on user report 2026-08-23: at 1.2 mm the orange under-constrained line
+    // was heavy enough to swallow a short segment and to hide which of two near-parallel lines
+    // the cursor was on. Selected entities pass a heavier stroke.
     GLModel::Geometry g;
     g.format = { GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3 };
     unsigned int base = 0;
@@ -7001,7 +7374,7 @@ void DesignSketchTool::draw_text(GLModel& /*model*/, const std::string& s, const
 // Draw one dimension's quote (extension/dimension lines, arrowheads, numeric label).
 // Geometry is recomputed from the (solved) entities so the quote tracks the sketch.
 // Returns the label centre in out_label; false if the annot references missing/degenerate
-// geometry. Shared by placed (render_dimensions) and live (render_live_quotes) quotes.
+// geometry. Used by the live characteristic quotes (render_live_quotes).
 bool DesignSketchTool::draw_dim_quote(const DimAnnot& a, double th, const ColorRGBA& dimcol,
                                       Vec2d& out_label)
 {
@@ -7093,18 +7466,121 @@ bool DesignSketchTool::draw_dim_quote(const DimAnnot& a, double th, const ColorR
     return true;
 }
 
-// Draw every placed (driving) dimension; cache each label centre for picking.
-void DesignSketchTool::render_dimensions(double unit_per_px)
+// Screen-constant annotation sizes, in plane units at the current zoom.
+SketchDimStyle DesignSketchTool::dim_style(double upp) const
 {
-    if (m_dimensions.empty()) return;
-    const ColorRGBA dimcol(0.85f, 0.85f, 0.85f, 1.0f);   // neutral leader (Measure parity)
-    // Label text is a CONSTANT screen size (like real CAD), not scaled to geometry,
-    // so a long line doesn't get huge text. ~15 px tall in plane units at this zoom.
-    const double th = std::max(15.0 * unit_per_px, 1e-4);
-    for (size_t di = 0; di < m_dimensions.size(); ++di) {
-        Vec2d label;
-        if (draw_dim_quote(m_dimensions[di], th, dimcol, label))
-            m_dimensions[di].label_pos = label;
+    SketchDimStyle st;
+    st.arrow_len     = 11.0 * upp;
+    st.arrow_width   = 5.0 * upp;
+    st.ext_gap       = 4.0 * upp;
+    st.ext_overshoot = 6.0 * upp;
+    st.text_width    = 38.0 * upp;
+    return st;
+}
+
+void DesignSketchTool::draw_triangles(GLModel& model, const std::vector<std::array<Vec2d, 3>>& tris,
+                                      const ColorRGBA& color)
+{
+    if (tris.empty()) return;
+    GLModel::Geometry g;
+    g.format = { GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3 };
+    unsigned int base = 0;
+    for (const auto& t : tris) {
+        for (const Vec2d& v : t)
+            g.add_vertex((Vec3f)m_plane.to_world(v).cast<float>());
+        g.add_triangle(base, base + 1, base + 2);
+        base += 3;
+    }
+    model.reset();
+    model.init_from(std::move(g));
+    model.set_color(color);
+    model.render();
+}
+
+void DesignSketchTool::draw_dim_layout(const SketchDimLayout& L, const ColorRGBA& col, double upp)
+{
+    std::vector<std::pair<Vec2d, Vec2d>> segs = L.ext_lines;
+    segs.insert(segs.end(), L.dim_lines.begin(), L.dim_lines.end());
+    draw_strokes(m_highlight_model, segs, std::max(0.6 * upp, 1e-5), col);
+    draw_triangles(m_fill_model, L.arrows, col);   // filled heads
+}
+
+namespace {
+// SolidWorks-style dimension text: the number in the dimension colour on a patch of the
+// background, so the dimension line reads as broken around it. Returns the text width in px.
+float draw_sketch_dim_text(const std::string& txt, const wxPoint& sp, float scale, int seq,
+                           const ColorRGBA& text, const ColorRGBA& bg, bool framed)
+{
+    if (txt.empty() || (sp.x < 0 && sp.y < 0)) return 0.0f;
+    ImGuiWrapper* imgui = wxGetApp().imgui();
+    ImGuiWrapper::push_common_window_style(scale);
+    imgui->set_next_window_pos((float)sp.x, (float)sp.y, ImGuiCond_Always, 0.5f, 0.5f);
+    imgui->set_next_window_bg_alpha(0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3.0f, 1.0f));
+    imgui->begin("##smartdim" + std::to_string(seq),
+                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+    ImDrawList*  dl  = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 ts  = ImGui::CalcTextSize(txt.c_str());
+    const ImVec2 a(pos.x - 3.0f, pos.y - 1.0f), b(pos.x + ts.x + 3.0f, pos.y + ts.y + 1.0f);
+    dl->AddRectFilled(a, b, ImGuiWrapper::to_ImU32(bg));
+    if (framed) dl->AddRect(a, b, ImGuiWrapper::to_ImU32(text), 0.0f, 0, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiWrapper::to_ImVec4(text));
+    ImGui::TextUnformatted(txt.c_str());
+    ImGui::PopStyleColor();
+    imgui->end();
+    ImGui::PopStyleVar(3);
+    ImGuiWrapper::pop_common_window_style();
+    return ts.x;
+}
+} // namespace
+
+// Every placed dimension, plus the live Smart Dimension preview that follows the cursor. Label
+// centres are cached for picking (click / double-click / drag the text).
+void DesignSketchTool::render_smart_dimensions(double upp, bool dark)
+{
+    const ColorRGBA c_dim    = dark ? ColorRGBA(0.90f, 0.90f, 0.90f, 1.0f) : ColorRGBA(0.06f, 0.06f, 0.06f, 1.0f);
+    const ColorRGBA c_driven = dark ? ColorRGBA(0.62f, 0.62f, 0.64f, 1.0f) : ColorRGBA(0.50f, 0.50f, 0.52f, 1.0f);
+    const ColorRGBA c_sel    = design_selection_color();
+    const ColorRGBA c_bg     = dark ? ColorRGBA(0.329f, 0.329f, 0.353f, 0.85f) : ColorRGBA(0.906f, 0.906f, 0.906f, 0.85f);
+    const SketchDimStyle st  = dim_style(upp);
+    const Camera& cam = wxGetApp().plater()->get_camera();
+
+    m_dim_label_pos.assign(m_dimensions.size(), Vec2d(1e18, 1e18));
+    for (size_t i = 0; i < m_dimensions.size(); ++i) {
+        SketchDimension& d = m_dimensions[i];
+        const SketchDimLayout L = layout_sketch_dimension(m_entities, d, st);
+        if (!L.ok) continue;
+        const bool sel = int(i) == m_dim_sel || int(i) == m_dim_drag;
+        const ColorRGBA col = sel ? c_sel : (d.driven ? c_driven : c_dim);
+        draw_dim_layout(L, col, upp);
+        // A driven dimension shows what the sketch measures; a driving one its target, which is
+        // what the geometry measures whenever the sketch solves.
+        double v = d.value;
+        if (d.driven || m_solve_ok) {
+            if (measure_sketch_dimension(m_entities, d, v) && d.driven) d.value = v;
+        }
+        draw_sketch_dim_text(format_sketch_dimension(d, v), world_to_screen_px(cam, m_plane.to_world(L.text)),
+                             m_render_scale, m_dim_label_seq++, col, c_bg, sel);
+        m_dim_label_pos[i] = L.text;
+    }
+
+    // Live preview: the dimension the next click would place, re-resolved from the cursor.
+    if (m_mode == Mode::Dimension && m_sd_first && m_sd_has_cursor && !m_awaiting_length) {
+        const SmartDimResolution r = resolve_smart_dimension(m_entities, *m_sd_first, m_sd_second, m_sd_cursor);
+        if (r.ok) {
+            const SketchDimLayout L = layout_sketch_dimension(m_entities, r.dim, st);
+            if (L.ok) {
+                draw_dim_layout(L, c_dim, upp);
+                draw_sketch_dim_text(format_sketch_dimension(r.dim, r.dim.value),
+                                     world_to_screen_px(cam, m_plane.to_world(L.text)),
+                                     m_render_scale, m_dim_label_seq++, c_dim, c_bg, false);
+            }
+        }
     }
 }
 
@@ -7112,7 +7588,7 @@ void DesignSketchTool::render_dimensions(double unit_per_px)
 // entity being edited (point/handle drag, or a lone selection). This is the Onshape
 // pattern that scales to every tool: each kind reports its defining dimension(s); each
 // is clickable (m_live_quotes) to promote to a driving dim + open the inline editor.
-// A dim already driven on the entity is skipped (render_dimensions draws that one).
+// A quantity already placed as a dimension is skipped (render_smart_dimensions draws that one).
 void DesignSketchTool::render_live_quotes(double unit_per_px)
 {
     m_live_quotes.clear();
@@ -7148,7 +7624,7 @@ void DesignSketchTool::render_live_quotes(double unit_per_px)
         // rounded rectangles": not a value that refuses to change, a label that does not exist.
         //
         // A plain rectangle looked fine only by accident: typing into its auto-edit chain creates
-        // a DRIVEN dimension, and render_dimensions draws that one from the annotation list. The
+        // a placed dimension, and render_smart_dimensions draws that one from the annotation list. The
         // rounded rect's W/H/R go through set_rounded_rect, which rebuilds the geometry and leaves
         // no annotation behind — so the live label was the only affordance it ever had.
         //
@@ -7379,7 +7855,7 @@ void DesignSketchTool::render_live_quotes(double unit_per_px)
         }
         case SketchEntity::Type::Arc: {
             // Arc radius is its single defining dimension (sweep angles edit via the end
-            // handles). radius lives in the same .radius field measure_dim/constraint_for
+            // handles). radius lives in the same .radius field measure_dim and the dimension constraint
             // read, so the Radius promotion path is identical to Circle.
             DimAnnot a; a.kind = DimType::Radius; a.ea = ei; protos.push_back(a); break;
         }
@@ -7461,10 +7937,7 @@ void DesignSketchTool::render_live_quotes(double unit_per_px)
     const ColorRGBA dimcol(0.30f, 0.88f, 0.66f, 1.0f);
     const double th = std::max(15.0 * unit_per_px, 1e-4);
     for (DimAnnot a : protos) {
-        bool driven = false;                       // skip if already a driving dim of this kind
-        for (const DimAnnot& d : m_dimensions)
-            if (d.ea == a.ea && d.kind == a.kind) { driven = true; break; }
-        if (driven) continue;
+        if (entity_has_dimension(a.ea, a.kind)) continue;   // the placed dimension says it already
         a.value = measure_dim(a);
         Vec2d label;
         if (draw_dim_quote(a, th, dimcol, label)) {
@@ -8466,6 +8939,8 @@ void DesignSketchTool::emit_step_hint()
         step  = m_tf_targets.empty() ? 0 : 1;
     } else if (m_mode == Mode::Select || m_mode == Mode::Constrain) {
         picks = int(m_selection.size());
+    } else if (m_mode == Mode::Dimension) {
+        step = int(m_sd_first.has_value()) + int(m_sd_second.has_value());   // Smart Dimension picks held
     } else {
         step = int(m_points.size());
     }
@@ -8720,66 +9195,102 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
         }
     }
 
-    // Committed entities of this session. DoF feedback (P3): a fully-constrained
-    // sketch (dof==0, consistent) paints green; entities touched by a conflicting
-    // constraint paint red; otherwise the under-constrained default (orange / grey
-    // construction). Selected entities always override to the shared selection colour.
-    // NOT white: the Design tab now paints a bed grid, and white-on-grid made a freshly
-    // drawn (hence auto-selected) line invisible against it. design_selection_color() is
-    // the same cyan the solid picks already wear, so "selected" reads the same everywhere.
+    // Committed entities of this session, in SolidWorks' sketch colours: under-defined blue,
+    // fully defined black (white-ish on the dark theme), over-defined / conflicting red, and the
+    // selection in the one selection colour, drawn heavier. The defined state is per entity,
+    // from the solver (recompute_defined), refreshed once a change settles rather than per frame.
+    // Construction geometry keeps its state colour and is dashed.
+    const bool      dark     = canvas.get_dark_mode_status();
     const ColorRGBA white(1.0f, 1.0f, 1.0f, 1.0f);   // hover handle only
-    const ColorRGBA sel_col = design_selection_color();
-    const ColorRGBA green(0.30f, 0.85f, 0.42f, 1.0f);
-    const ColorRGBA conflict(1.0f, 0.22f, 0.22f, 1.0f);
+    const ColorRGBA sel_col  = design_selection_color();
+    const ColorRGBA c_def    = dark ? ColorRGBA(0.93f, 0.93f, 0.93f, 1.0f) : ColorRGBA(0.05f, 0.05f, 0.05f, 1.0f);
+    const ColorRGBA c_under  = dark ? ColorRGBA(0.45f, 0.68f, 1.00f, 1.0f) : ColorRGBA(0.122f, 0.373f, 0.80f, 1.0f);   // #1F5FCC
+    const ColorRGBA conflict = dark ? ColorRGBA(1.00f, 0.32f, 0.32f, 1.0f) : ColorRGBA(0.86f, 0.08f, 0.08f, 1.0f);
+    const ColorRGBA c_hover(1.0f, 0.55f, 0.0f, 1.0f);    // pre-selection under the Smart Dimension cursor
     const ColorRGBA opref(0.80f, 0.45f, 1.0f, 1.0f);     // violet: the edit-op's reference pick
     const double    upp_dash = 1.0 / std::max(camera.get_zoom(), 1e-6);   // world units per pixel
     const ColorRGBA editing(1.0f, 0.78f, 0.10f, 1.0f);   // amber: entity whose dim is being typed
-    const bool fully = (m_dof == 0 && m_solve_ok);
+    const double    hw_sel   = std::max(0.5, 1.6 * upp_dash);
+    if ((m_defined_dirty || m_entity_defined.size() != m_entities.size()) && !m_dragging_point && !m_dragging_handle)
+        recompute_defined();
+    const bool all_defined = m_dof == 0 && m_solve_ok && !m_constraints.empty();
     // While an auto-edit value field is open, the active step names the entities its dimension
     // drives — light them up so it's obvious WHICH feature the number (e.g. a circle's radius)
     // changes.
     const std::vector<int>* edit_hi =
         (m_autoedit_dim_idx >= 0 && m_autoedit_dim_idx < int(m_autoedit_dims.size()))
             ? &m_autoedit_dims[m_autoedit_dim_idx].hi : nullptr;
-    std::vector<Vec2d> point_markers, sel_point_markers;
+    // Entities held as Smart Dimension picks paint as selected.
+    auto sd_picked = [&](int i) {
+        return (m_sd_first && !m_sd_first->point && m_sd_first->entity == i) ||
+               (m_sd_second && !m_sd_second->point && m_sd_second->entity == i);
+    };
+    std::vector<Vec2d> pt_def, pt_under, pt_bad, sel_point_markers;
     for (size_t i = 0; i < m_entities.size(); ++i) {
         const SketchEntity& e = m_entities[i];
         const bool selected =
-            std::find(m_selection.begin(), m_selection.end(), int(i)) != m_selection.end();
+            std::find(m_selection.begin(), m_selection.end(), int(i)) != m_selection.end() || sd_picked(int(i));
         const bool editing_this =
             edit_hi && std::find(edit_hi->begin(), edit_hi->end(), int(i)) != edit_hi->end();
         const bool bad = i < m_entity_conflict.size() && m_entity_conflict[i];
+        const bool defined = all_defined ||
+            (m_defined_valid && i < m_entity_defined.size() && m_entity_defined[i]);
         // The first pick of an edit-op has a DIFFERENT ROLE from the rest of the selection —
-        // Mirror's is the axis, Fillet/Chamfer's is the first of the two lines — and until now
-        // every pick painted the same white, so the picture could not answer "what did I select
-        // as what". Violet, not cyan: cyan means SELECTED here and nothing else may wear it.
+        // Mirror's is the axis, Fillet/Chamfer's is the first of the two lines — so it gets its
+        // own colour. Violet, not cyan: cyan means SELECTED here and nothing else may wear it.
         // vd6v.
         const bool op_ref = is_edit_op_mode() && int(i) == m_op_a;
+        const ColorRGBA state = bad ? conflict : (defined ? c_def : c_under);
         ColorRGBA col;
-        if (editing_this)        col = editing;
-        else if (op_ref)         col = opref;
-        else if (selected)       col = sel_col;
-        else if (bad)            col = conflict;
-        else if (e.construction) col = grey;
-        else                     col = fully ? green : orange;
+        if (editing_this)  col = editing;
+        else if (op_ref)   col = opref;
+        else if (selected) col = sel_col;
+        else               col = state;
         if (e.type == SketchEntity::Type::Point) {
-            (selected ? sel_point_markers : point_markers).push_back(e.p0);
+            if (selected)     sel_point_markers.push_back(e.p0);
+            else if (bad)     pt_bad.push_back(e.p0);
+            else if (defined) pt_def.push_back(e.p0);
+            else              pt_under.push_back(e.p0);
             continue;
         }
         bool closed = false;
         std::vector<Vec2d> poly = entity_polyline(e, closed);
-        GLModel& target = (selected || editing_this || op_ref) ? m_highlight_model : m_line_model;
+        const bool heavy = selected || editing_this || op_ref;
+        GLModel& target = heavy ? m_highlight_model : m_line_model;
+        const double hw = heavy ? hw_sel : 0.3;
         if (e.construction) {
             for (const std::vector<Vec2d>& d : dash_polyline(poly, closed, 9.0 * upp_dash, 6.0 * upp_dash))
-                draw_quad_strip(target, d, false, col);
+                draw_quad_strip(target, d, false, col, hw);
         } else {
-            draw_quad_strip(target, poly, closed, col);
+            draw_quad_strip(target, poly, closed, col, hw);
         }
     }
-    if (!point_markers.empty())
-        draw_vertices(m_vertex_model, point_markers, yellow);
+    draw_vertices(m_vertex_model, pt_def,   c_def);
+    draw_vertices(m_vertex_model, pt_under, c_under);
+    draw_vertices(m_vertex_model, pt_bad,   conflict);
     if (!sel_point_markers.empty())
         draw_vertices(m_highlight_model, sel_point_markers, sel_col);
+
+    // Smart Dimension: the pre-selection under the cursor, and the held point picks.
+    if (m_mode == Mode::Dimension) {
+        const double mk = std::max(4.5 * upp_dash, 1e-4);
+        std::vector<Vec2d> held;
+        for (const auto* pk : { &m_sd_first, &m_sd_second })
+            if (*pk && (*pk)->point) {
+                Vec2d q = Vec2d::Zero();
+                if ((*pk)->entity == kSketchRefOrigin || point_at((*pk)->entity, (*pk)->role, q)) held.push_back(q);
+            }
+        if (!held.empty()) draw_vertices(m_highlight_model, held, sel_col, mk);
+        if (m_sd_has_hover && !m_awaiting_length) {
+            if (m_sd_hover.point || m_sd_hover.entity == kSketchRefOrigin) {
+                draw_vertices(m_highlight_model, { m_sd_hover_pt }, c_hover, mk);
+            } else if (m_sd_hover.entity >= 0 && m_sd_hover.entity < int(m_entities.size())) {
+                bool closed = false;
+                const std::vector<Vec2d> poly = entity_polyline(m_entities[m_sd_hover.entity], closed);
+                draw_quad_strip(m_highlight_model, poly, closed, c_hover, hw_sel);
+            }
+        }
+    }
 
     // Constraint badges during a LIVE sketch. They used to render only inside Mode::Constrain
     // on a COMMITTED feature, so every constraint applied while drawing — which is the path the
@@ -8867,9 +9378,9 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
                           std::max(5.5 * upp, 1e-4));
     }
 
-    // Placed dimension quotes (drawn in every mode so they persist while sketching).
-    // Pass plane-units-per-pixel so labels keep a constant on-screen size.
-    render_dimensions(1.0 / std::max(camera.get_zoom(), 1e-6));
+    // Placed dimensions (drawn in every mode so they persist while sketching) and the live
+    // Smart Dimension preview. Plane-units-per-pixel keeps them a constant on-screen size.
+    render_smart_dimensions(1.0 / std::max(camera.get_zoom(), 1e-6), dark);
     render_live_quotes(1.0 / std::max(camera.get_zoom(), 1e-6));
     // Draw-then-edit: the selection's live quotes now exist. Open the primary value editor on
     // the next event-loop tick (NOT here inside the paint) so the floating field grabs focus
@@ -9611,6 +10122,51 @@ bool DesignSketchTool::select_at_screen(GLCanvas3D& canvas, int sx, int sy)
     return true;
 }
 
+bool DesignSketchTool::dimension_text_mouse(GLCanvas3D& canvas, const wxMouseEvent& evt)
+{
+    if (m_dim_drag >= 0) {
+        if (evt.Dragging() && evt.LeftIsDown()) {
+            if (!m_dim_drag_moved &&
+                std::abs(evt.GetX() - m_dim_press_x) + std::abs(evt.GetY() - m_dim_press_y) > 3)
+                m_dim_drag_moved = true;
+            if (m_dim_drag_moved && m_dim_drag < int(m_dimensions.size())) {
+                Vec2d p;
+                screen_to_plane(canvas, evt, p);
+                m_dimensions[m_dim_drag].text_pos = p + m_dim_drag_off;
+            }
+            return true;
+        }
+        if (evt.LeftUp()) { m_dim_drag = -1; return true; }
+    }
+    if (m_dimensions.empty() || !(evt.LeftDown() || evt.LeftDClick() || evt.RightDown())) return false;
+    Vec2d p;
+    screen_to_plane(canvas, evt, p);
+    // Text is wider than a grip: a generous ~24 px radius around the label centre.
+    const Linef3 rl = canvas.mouse_ray(Point(evt.GetX() + 24, evt.GetY()));
+    const double ltol = std::max(1e-3, (m_plane.project(rl.a, rl.vector()) - p).norm());
+    const int di = hit_test_dimension(p, ltol);
+    if (di < 0) return false;
+    m_dim_sel = di;
+    if (evt.LeftDClick()) {                 // Modify box
+        m_dim_drag = -1;
+        open_value_editor(di);
+        return true;
+    }
+    if (evt.RightDown()) {                  // driven <-> driving
+        toggle_dimension_driven(di);
+        return true;
+    }
+    m_selection.clear();                    // a dimension is its own selection
+    m_point_sel.clear();
+    m_dim_drag       = di;
+    m_dim_drag_moved = false;
+    m_dim_drag_off   = m_dimensions[di].text_pos - p;
+    m_dim_press_x    = evt.GetX();
+    m_dim_press_y    = evt.GetY();
+    if (on_selection_changed) on_selection_changed(0);
+    return true;
+}
+
 int DesignSketchTool::hit_test(const Vec2d& p, double tol) const
 {
     double best = tol;
@@ -10341,6 +10897,7 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
     // Selection mode: click to pick an entity, Shift/Ctrl to extend, double-click
     // to grab the whole connected loop. Drag falls through so the camera can orbit.
     if (m_mode == Mode::Select) {
+        if (dimension_text_mouse(canvas, evt)) return true;   // select / drag / toggle a dimension
         if (update_hover(canvas, evt)) return true;   // repaint when the hovered handle changes
         const bool extend = evt.ShiftDown() || evt.ControlDown();
 
@@ -10415,6 +10972,7 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
                 m_drag_poly_fi = -1;
                 m_drag_rect_fi = -1;
                 m_drag_slot_fi = -1;
+                m_defined_dirty = true;
                 return true;
             }
             if (m_dragging_handle) {
@@ -10422,6 +10980,7 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
                 screen_to_plane(canvas, evt, p);
                 set_handle(m_drag_handle, p);
                 m_dragging_handle = false;
+                m_defined_dirty = true;
                 return true;
             }
             return false;
@@ -10430,6 +10989,7 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
         if (evt.LeftDown() || evt.LeftDClick()) {
             m_dragging_point = false;           // a fresh press disarms any stale grab
             m_dragging_handle = false;
+            m_dim_sel = -1;                     // a click off every dimension text drops that pick
             m_drag_poly_fi = -1;
             m_drag_rect_fi = -1;
             m_drag_slot_fi = -1;
@@ -10454,8 +11014,6 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
             if (evt.LeftDown()) {
                 const Linef3 rdl = canvas.mouse_ray(Point(evt.GetX() + 24, evt.GetY()));
                 const double ltol = std::max(tol, (m_plane.project(rdl.a, rdl.vector()) - p).norm());
-                const int di = hit_test_dimension(p, ltol);
-                if (di >= 0) { open_value_editor(di); return true; }
                 for (const DimAnnot& q : m_live_quotes) {
                     if ((q.label_pos - p).norm() <= ltol) {
                         if (q.kind == DimType::Angle)
@@ -10598,7 +11156,7 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
             } else if (!extend) {
                 // Inside a closed loop (not on an edge/point) → select it as a face
                 // and hand off to the panel, which commits the sketch and extrudes.
-                if (evt.LeftDown() && on_face_selected) {
+                if (evt.LeftDown() && on_face_selected && m_dim_sel < 0) {
                     const int reg = region_at(p);
                     if (reg >= 0) {
                         m_selection.clear();
@@ -10631,56 +11189,65 @@ bool DesignSketchTool::on_mouse_impl(wxMouseEvent& evt, GLCanvas3D& canvas)
         return false;                               // let drag orbit the camera
     }
 
-    // Dimension mode: click entities directly. 2 points -> Distance, a line -> Length,
-    // a circle -> Diameter, an arc -> Radius, a point then a line -> DistanceToLine.
-    // Each resolved pick places a driving quote and pops the value card.
+    // Smart Dimension (SolidWorks). Hover pre-selects what a click would take; the first click
+    // holds an entity or a point and from then on a preview dimension follows the cursor — its
+    // kind (aligned / horizontal / vertical, the angle's sector) re-resolved on every move by
+    // resolve_smart_dimension. A click on a second entity or point switches to the two-reference
+    // dimension; a click on empty space places it there and opens the Modify box. The tool stays
+    // armed for the next dimension. Dimension text can be clicked, dragged and double-clicked here
+    // as in Select.
     if (m_mode == Mode::Dimension) {
-        if (update_hover(canvas, evt)) return true;   // repaint when the hovered handle changes
-        if (evt.LeftDClick()) {                    // double-click a quote label -> edit it
-            Vec2d p;
-            screen_to_plane(canvas, evt, p);
-            const Linef3 r2 = canvas.mouse_ray(Point(evt.GetX() + 28, evt.GetY()));
-            const Vec2d p2 = m_plane.project(r2.a, r2.vector());
-            const double di_tol = std::max(2.0, (p2 - p).norm());
-            const int di = hit_test_dimension(p, di_tol);
-            if (di >= 0) edit_dimension(di);
-            m_dim_has0 = false;
-            return true;
+        Vec2d p;
+        screen_to_plane(canvas, evt, p);
+        const Linef3 r8 = canvas.mouse_ray(Point(evt.GetX() + 8, evt.GetY()));
+        const double tol = std::max(1e-3, (m_plane.project(r8.a, r8.vector()) - p).norm());
+        if (!m_sd_first && dimension_text_mouse(canvas, evt)) return true;
+        if (evt.Moving()) {
+            const bool had = m_sd_has_hover;
+            const SmartDimPick prev = m_sd_hover;
+            m_sd_cursor     = p;
+            m_sd_has_cursor = true;
+            SmartDimPick h;
+            Vec2d mk;
+            m_sd_has_hover = smart_pick_at(p, tol, h, mk);
+            if (m_sd_has_hover) { m_sd_hover = h; m_sd_hover_pt = mk; }
+            // Repaint while a preview follows the cursor, or when the pre-selection changed.
+            const bool changed = had != m_sd_has_hover || (m_sd_has_hover && h != prev);
+            return m_sd_first.has_value() || changed;
         }
         if (evt.LeftDown()) {
-            Vec2d p;
-            screen_to_plane(canvas, evt, p);
-            const Linef3 r2 = canvas.mouse_ray(Point(evt.GetX() + 8, evt.GetY()));
-            const Vec2d p2 = m_plane.project(r2.a, r2.vector());
-            const double tol = std::max(1e-3, (p2 - p).norm());
-            int pe; SketchPointRole pr;
-            const bool got_pt = hit_test_point(p, tol, pe, pr);
-            const int he = hit_test(p, tol);
-            if (!m_dim_has0) {
-                if (got_pt) {                          // first point picked: await a second
-                    m_dim_e0 = pe; m_dim_r0 = pr; m_dim_has0 = true;
-                } else if (he >= 0) {                  // whole-entity dimension
-                    DimAnnot a; a.ea = he;
-                    const SketchEntity::Type t = m_entities[he].type;
-                    if (t == SketchEntity::Type::Line)        { a.kind = DimType::Length;   place_dimension(a); }
-                    else if (t == SketchEntity::Type::Circle) { a.kind = DimType::Diameter; place_dimension(a); }
-                    else if (t == SketchEntity::Type::Arc)    { a.kind = DimType::Radius;   place_dimension(a); }
-                }
-            } else {
-                if (got_pt && !(pe == m_dim_e0 && pr == m_dim_r0)) {
-                    DimAnnot a; a.kind = DimType::Distance;
-                    a.ea = m_dim_e0; a.ra = m_dim_r0; a.eb = pe; a.rb = pr;
-                    place_dimension(a);
-                } else if (he >= 0 && m_entities[he].type == SketchEntity::Type::Line) {
-                    DimAnnot a; a.kind = DimType::DistanceToLine;
-                    a.ea = m_dim_e0; a.ra = m_dim_r0; a.eb = he;
-                    place_dimension(a);
-                }
-                m_dim_has0 = false;                    // reset after the second pick
+            m_dim_sel = -1;
+            SmartDimPick pk;
+            Vec2d mk;
+            const bool hit = smart_pick_at(p, tol, pk, mk);
+            m_sd_cursor     = p;
+            m_sd_has_cursor = true;
+            if (!m_sd_first) {
+                if (hit) m_sd_first = pk;
+                return true;
             }
+            // A point of the held entity (or the entity of a held point) is the same geometry
+            // again, not a second reference: it places, like clicking the held pick itself.
+            const bool same_geometry = hit && pk.entity == m_sd_first->entity && pk.point != m_sd_first->point;
+            if (hit && !m_sd_second && pk != *m_sd_first && !same_geometry) {
+                // A second reference the rules can dimension against the first switches the
+                // preview to the two-reference dimension; one they cannot (two coincident points,
+                // say) starts over from the new pick.
+                if (resolve_smart_dimension(m_entities, *m_sd_first, pk, p).ok) m_sd_second = pk;
+                else                                                             m_sd_first  = pk;
+                return true;
+            }
+            // Empty space, the held pick again, or anything once two are held: place it here.
+            const SmartDimResolution r = resolve_smart_dimension(m_entities, *m_sd_first, m_sd_second, p);
+            clear_smart_dim_picks();
+            if (r.ok) place_smart_dimension(r.dim, true);
             return true;
         }
-        if (evt.RightDown()) { m_dim_has0 = false; return true; }
+        if (evt.LeftDClick()) return true;
+        if (evt.RightDown()) {
+            if (m_sd_first) { clear_smart_dim_picks(); return true; }   // drop the held pick
+            return false;                                              // let the offer open
+        }
         return false;                                  // let drag orbit the camera
     }
 

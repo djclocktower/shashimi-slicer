@@ -2,6 +2,7 @@
 
 #include "slic3r/GUI/CAD/SketchInlineEditor.hpp"
 #include "slic3r/GUI/CAD/DesignInteraction.hpp"
+#include "slic3r/GUI/CAD/DesignPanel.hpp"   // DesignPanel::if_built()->mcp_doc(): sketch dimensions
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/OpenGLManager.hpp"
 #include "slic3r/GUI/3DBed.hpp"
@@ -75,9 +76,37 @@ DesignCanvas::DesignCanvas(wxWindow* parent)
     m_sketch_tool.on_commit_entities = [this](const std::vector<SketchEntity>& ents,
                                               const std::vector<SketchEntityConstraintDef>& cons,
                                               const SketchPlane& pl) {
+        CadDocument* doc = nullptr;
+        if (DesignPanel* panel = DesignPanel::if_built()) doc = &panel->mcp_doc();
+        const size_t n_before = doc ? doc->features.size() : 0;
+        const std::vector<SketchDimension> dims = m_sketch_tool.dimensions();
         if (m_on_sketch_entities_commit) m_on_sketch_entities_commit(ents, cons, pl);
+        // The commit handler predates Smart Dimension and stores entities + constraints only.
+        // Put the annotations on the feature it just wrote: the one it appended, or the one being
+        // re-edited. Guarded on the entity and constraint counts so a refused or rolled-back
+        // commit is never handed another sketch's dimensions. Idempotent with a handler that
+        // stores them itself.
+        if (doc != nullptr) {
+            int target = -1;
+            if (doc->features.size() == n_before + 1)
+                target = int(doc->features.size()) - 1;
+            else if (m_edit_feature >= 0 && doc->features.size() == n_before)
+                target = m_edit_feature;
+            if (target >= 0 && target < int(doc->features.size())) {
+                CadFeature& f = doc->features[target];
+                if (f.type == CadFeatureType::Sketch && f.entities.size() == ents.size() &&
+                    f.entity_constraints.size() == cons.size()) {
+                    f.dimensions = dims;
+                    sketch_dimensions_sanitize(f.dimensions, int(f.entities.size()), int(f.entity_constraints.size()));
+                }
+            }
+        }
+        m_edit_feature = -1;
         if (m_canvas) m_canvas->set_as_dirty();
         if (m_canvas_widget) m_canvas_widget->Refresh();
+    };
+    m_sketch_tool.on_status_message = [this](const std::string& msg) {
+        set_status_text(wxString::FromUTF8(msg), wxColour(240, 180, 80));
     };
 
     // Onshape-style in-canvas value editor, floating over the GL canvas. The tool hands
@@ -533,6 +562,7 @@ void DesignCanvas::set_view(const std::string& view_name)
 
 void DesignCanvas::begin_sketch(const SketchPlane& plane, DesignSketchTool::Mode mode)
 {
+    m_edit_feature = -1;
     m_sketch_tool.begin(plane, mode);
     if (m_canvas) m_canvas->set_as_dirty();
     if (m_canvas_widget) m_canvas_widget->Refresh();
@@ -545,11 +575,35 @@ void DesignCanvas::set_sketch_plane(const SketchPlane& plane)
     if (m_canvas_widget) m_canvas_widget->Refresh();
 }
 
+// The panel hands over the feature's OWN vectors (f.entities), so the feature being re-edited is
+// identified by address — exact, with no geometric matching. -1 when it is not a document feature.
+static int doc_feature_owning(const std::vector<SketchEntity>& entities)
+{
+    DesignPanel* panel = DesignPanel::if_built();
+    if (panel == nullptr) return -1;
+    const CadDocument& doc = panel->mcp_doc();
+    for (int i = 0; i < int(doc.features.size()); ++i)
+        if (&doc.features[i].entities == &entities) return i;
+    return -1;
+}
+
 void DesignCanvas::edit_sketch(const std::vector<SketchEntity>& entities,
                                const std::vector<SketchEntityConstraintDef>& constraints,
                                const SketchPlane& plane)
 {
-    m_sketch_tool.begin_edit(entities, constraints, plane);
+    const int feature = doc_feature_owning(entities);
+    const std::vector<SketchDimension> dims =
+        feature >= 0 ? DesignPanel::if_built()->mcp_doc().features[feature].dimensions : std::vector<SketchDimension>{};
+    edit_sketch(entities, constraints, plane, dims);
+}
+
+void DesignCanvas::edit_sketch(const std::vector<SketchEntity>& entities,
+                               const std::vector<SketchEntityConstraintDef>& constraints,
+                               const SketchPlane& plane,
+                               const std::vector<SketchDimension>& dimensions)
+{
+    m_edit_feature = doc_feature_owning(entities);   // before begin_edit: `entities` may be that feature's
+    m_sketch_tool.begin_edit(entities, constraints, plane, dimensions);
     if (m_canvas) m_canvas->set_as_dirty();
     if (m_canvas_widget) m_canvas_widget->Refresh();
 }
@@ -1569,7 +1623,7 @@ bool DesignCanvas::sketch_disarm_tool()
 
 bool DesignCanvas::drawing_in_progress() const
 {
-    return m_sketch_tool.pending_points() > 0;
+    return m_sketch_tool.pending_points() > 0 || m_sketch_tool.smart_dim_pending();
 }
 
 bool DesignCanvas::has_any_selection() const
