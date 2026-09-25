@@ -374,7 +374,7 @@ wxBoxSizer *PreferencesDialog::create_item_language_combobox(wxString title, wxS
         wxLANGUAGE_ROMANIAN
     };
 
-    auto translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+    auto translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_L10N_DOMAIN);
     std::vector<const wxLanguageInfo *> language_infos;
     language_infos.emplace_back(wxLocale::GetLanguageInfo(wxLANGUAGE_ENGLISH));
     for (size_t i = 0; i < translations.GetCount(); ++i) {
@@ -1760,12 +1760,6 @@ void PreferencesDialog::create_items()
     g_sizer->Add(item_speed_dial_recents);
 
 #ifdef SLIC3R_CAD
-    auto item_cad_feature      = create_item_checkbox(_L("CAD feature (experimental)"),
-        _L("With this option enabled, the Design tab is shown, where models can be built and edited "
-           "parametrically. This feature is experimental and still under development."),
-        "enable_cad_feature", _L("(Requires restart)"));
-    g_sizer->Add(item_cad_feature);
-
     auto item_auto_close_sketch_loops = create_item_checkbox(_L("Auto-close sketch loops"),
         _L("Treat sketch endpoints within 0.001 mm as one joint and weld the loop shut. "
            "Off: only exactly coincident endpoints join, so a loop with a tiny gap is "
@@ -1851,14 +1845,11 @@ void PreferencesDialog::create_items()
     g_sizer->Add(reverse_mouse_zoom);
 
 #ifdef SLIC3R_CAD
-    // Design-tab only, so it stays out of the way while the CAD feature is switched off.
-    if (wxGetApp().is_enable_cad_feature()) {
-        auto item_connector_face_glyph = create_item_checkbox(_L("Draw mate connectors as a face"),
-            _L("In the Design tab, draw a mate connector as a small face instead of the conventional "
-               "disc with a roll quadrant. A face's orientation is read without being learned. "
-               "Turn this off for the conventional CAD representation."), "design_connector_face_glyph");
-        g_sizer->Add(item_connector_face_glyph);
-    }
+    auto item_connector_face_glyph = create_item_checkbox(_L("Draw mate connectors as a face"),
+        _L("In the Design tab, draw a mate connector as a small face instead of the conventional "
+           "disc with a roll quadrant. A face's orientation is read without being learned. "
+           "Turn this off for the conventional CAD representation."), "design_connector_face_glyph");
+    g_sizer->Add(item_connector_face_glyph);
 
     // Push the weld preference into the kernel now so toggling it takes effect without
     // a restart (the sketch tool also re-pushes on activation, see DesignSketchTool::begin).

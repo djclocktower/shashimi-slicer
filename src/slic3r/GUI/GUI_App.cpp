@@ -283,7 +283,7 @@ bool is_associate_files(std::wstring extend)
     wchar_t app_path[MAX_PATH];
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
-    std::wstring prog_id             = L" Orca.Slicer.1";
+    std::wstring prog_id             = L" Shashimi.Slicer.1";
     std::wstring reg_base            = L"Software\\Classes";
     std::wstring reg_extension       = reg_base + L"\\." + extend;
 
@@ -3053,7 +3053,7 @@ bool GUI_App::on_init_inner()
             RichMessageDialog
                 dlg(nullptr,
                     wxString::Format(_L("%s\nDo you want to continue?"), msg),
-                    "OrcaSlicer", wxICON_QUESTION | wxYES_NO);
+                    SLIC3R_APP_FULL_NAME, wxICON_QUESTION | wxYES_NO);
             dlg.ShowCheckBox(_L("Remember my choice"));
             if (dlg.ShowModal() != wxID_YES) return false;
 
@@ -7957,7 +7957,7 @@ bool GUI_App::load_language(wxString language, bool initial)
                     // There seems to be a support for that on Windows and OSX, while on Linuxes the code just returns wxLocale::GetSystemLanguage().
                     // The last parameter gets added to the list of detected dictionaries. This is a workaround
                     // for not having the English dictionary. Let's hope wxWidgets of various versions process this call the same way.
-                    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, wxLANGUAGE_ENGLISH);
+                    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_L10N_DOMAIN, wxLANGUAGE_ENGLISH);
                     if (!best_language.IsEmpty()) {
                         m_language_info_best = wxLocale::FindLanguageInfo(best_language);
                         BOOST_LOG_TRIVIAL(info) << boost::format("Best translation language detected (may be different from user locales): %1%") %
@@ -8126,7 +8126,7 @@ bool GUI_App::load_language(wxString language, bool initial)
     // Override language at the active wxTranslations class (which is stored in the active m_wxLocale)
     // to load possibly different dictionary, for example, load Czech dictionary for Slovak language.
     wxTranslations::Get()->SetLanguage(language_dict);
-    m_wxLocale->AddCatalog(SLIC3R_APP_KEY);
+    m_wxLocale->AddCatalog(SLIC3R_L10N_DOMAIN);
     m_active_language_code = requested_language_code;
     m_imgui->set_language(into_u8(requested_language_code));
 
@@ -9766,8 +9766,8 @@ void GUI_App::associate_files(std::wstring extend)
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
-    std::wstring prog_id = L" Orca.Slicer.1";
-    std::wstring prog_desc = L"OrcaSlicer";
+    std::wstring prog_id = L" Shashimi.Slicer.1";
+    std::wstring prog_desc = L"Shashimi Slicer";
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;
@@ -9793,8 +9793,8 @@ void GUI_App::disassociate_files(std::wstring extend)
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
-    std::wstring prog_id = L" Orca.Slicer.1";
-    std::wstring prog_desc = L"OrcaSlicer";
+    std::wstring prog_id = L" Shashimi.Slicer.1";
+    std::wstring prog_desc = L"Shashimi Slicer";
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;

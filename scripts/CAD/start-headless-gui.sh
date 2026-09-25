@@ -22,7 +22,7 @@ set -euo pipefail
 
 DISP="${DISP:-:11}"
 GEOM="${GEOM:-1920x1080}"
-BIN="${BIN:-/OrcaSlicer/build/src/Release/orca-slicer}"
+BIN="${BIN:-/OrcaSlicer/build/src/Release/shashimi-slicer}"
 # Packaging cannot bundle python (the deps python layer carries a doubled-DESTDIR RUNPATH), so the
 # build-tree binary needs the deps libpython on the path. Packaging-only issue; the app runs fine.
 LIBPY="/OrcaSlicer/deps/build/destdir/usr/local/libpython/lib"

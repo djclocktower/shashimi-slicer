@@ -623,7 +623,7 @@ jobs:
           # Build + tar the unit tests (-t) on both Linux legs so each arch
           # (x86_64 + aarch64) gets tested by its own unit_tests_linux_* job.
           ./build_linux.sh -istrlL
-          ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/orca-slicer
+          ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/shashimi-slicer
           appimage=./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage
           mv -n ./build/OrcaSlicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
           chmod +x "$appimage"
@@ -677,7 +677,7 @@ jobs:
           test_repo_dir="${{ runner.temp }}/orca-test-repo"
           rm -rf "$test_repo_dir"
           git clone --depth 1 https://github.com/OrcaSlicer/orca-test-repo.git "$test_repo_dir"
-          python3 "$test_repo_dir/run_test.py" "${{ github.workspace }}/build/package/bin/orca-slicer"
+          python3 "$test_repo_dir/run_test.py" "${{ github.workspace }}/build/package/bin/shashimi-slicer"
 
       - name: Build orca_custom_preset_tests
         if: github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64'

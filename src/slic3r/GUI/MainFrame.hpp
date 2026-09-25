@@ -43,6 +43,10 @@
 // names rather than positional indices so optional pages cannot shift them.
 #define TAB_ID_HOME          "home"
 #ifdef SLIC3R_CAD
+// The two CAD tabs show one shared workspace (CadTabPage). TAB_ID_DESIGN is the id of the
+// single Design tab they replaced; no page uses it any more.
+#define TAB_ID_SKETCH        "sketch"
+#define TAB_ID_MODELING      "modeling"
 #define TAB_ID_DESIGN        "design"
 #endif
 #define TAB_ID_PREPARE       "prepare"
@@ -72,6 +76,8 @@ class PrintHostQueueDialog;
 class Plater;
 #ifdef SLIC3R_CAD
 class DesignPanel;
+class CadTabPage;
+class CadWorkspace;
 #endif
 class MainFrame;
 class WebViewPanel;
@@ -281,7 +287,8 @@ protected:
 
 public:
     MainFrame();
-    ~MainFrame() = default;
+    // Out of line: members hold types this header only forward-declares.
+    ~MainFrame();
 #ifdef __APPLE__
     bool get_mac_full_screen() { return m_mac_fullscreen; }
 #endif
@@ -453,7 +460,11 @@ public:
     // Lazy pages, created once and kept for the frame's life; their panels are reached
     // through LazyInstance's statics, and show_device() only moves pages in and out of the book.
 #ifdef SLIC3R_CAD
-    LazyPage<DesignPanel>* m_design_page { nullptr };
+    // Sketch and Modeling show the one DesignPanel held by m_cad_workspace, moving it to the
+    // selected page; see CadTabPage.
+    std::unique_ptr<CadWorkspace> m_cad_workspace;
+    CadTabPage* m_sketch_tab { nullptr };
+    CadTabPage* m_modeling_tab { nullptr };
 #endif
     //BBS: GUI refactor
     LazyPage<MonitorPanel>* m_monitor_page{ nullptr };

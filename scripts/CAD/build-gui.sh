@@ -23,9 +23,12 @@ PROJECT="$(sed -n 's/^project(\([A-Za-z_0-9]*\)).*/\1/p' "$REPO/CMakeLists.txt" 
 case "$PROJECT" in
     Snapmaker_Orca) PREFIX=snapmaker; BIN=snapmaker-orca ;;
     OrcaSlicer)     PREFIX=orcacad;  BIN=orca-slicer    ;;
+    ShashimiSlicer) PREFIX=shashimi; BIN=shashimi-slicer ;;
     *) echo "FATAL: unrecognised project($PROJECT) in $REPO/CMakeLists.txt" >&2; exit 2 ;;
 esac
 TARGET="$PROJECT"
+# Shashimi renamed the project and the binary but kept the upstream target name.
+if [ "$PROJECT" = ShashimiSlicer ]; then TARGET=OrcaSlicer; fi
 IMAGE="${PREFIX}-deps"
 BUILD_VOL="${PREFIX}_buildcache"
 

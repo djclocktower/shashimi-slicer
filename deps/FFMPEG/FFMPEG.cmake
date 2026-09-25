@@ -51,9 +51,12 @@ else ()
         set(_build_j "-j$ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
     endif()
 
-    ExternalProject_Add(dep_FFMPEG
+    orcaslicer_github_via_git(_ffmpeg_source
         URL https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.0.3.tar.gz
         URL_HASH SHA256=DEEDCABE339165214A3637DF4C86A507AEF0D793CF8774FF68735F4737E8DDBC
+    )
+    ExternalProject_Add(dep_FFMPEG
+        ${_ffmpeg_source}
         DOWNLOAD_DIR ${DEP_DOWNLOAD_DIR}/FFMPEG
         CONFIGURE_COMMAND ${_conf_cmd}
             ${_cross_cmd}

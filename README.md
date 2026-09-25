@@ -1,3 +1,39 @@
+# Shashimi Slicer
+
+Shashimi Slicer is a fork of [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) that adds a
+SolidWorks-style parametric CAD workspace to the slicer, so a part can be designed, changed and
+printed without leaving the application.
+
+- **Sketch** tab: 2D sketches on planes or model faces, with geometric relations and driving
+  dimensions solved as you draw.
+- **Modeling** tab: a feature history (extrude, revolve, sweep, loft, fillet, chamfer, shell,
+  patterns, booleans and more) that rebuilds when a dimension changes.
+- Both tabs work on the same document and viewport. **Prepare**, **Preview** and the rest of
+  OrcaSlicer's slicing workflow are unchanged, and a design is committed to the plate as ordinary
+  objects. The design is saved inside the project's 3MF.
+- Planned: toolpaths for hobby CNC machines.
+
+## Credits
+
+Shashimi Slicer builds on the work of:
+
+- [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) by SoftFever and contributors, which also
+  contributed the parametric CAD kernel and Design tab this fork builds on
+- [Bambu Studio](https://github.com/bambulab/BambuStudio) by Bambu Lab
+- [PrusaSlicer](https://github.com/prusa3d/PrusaSlicer) by Prusa Research, and Slic3r by
+  Alessandro Ranellucci and the RepRap community
+- [SolveSpace](https://solvespace.com/) for the geometric constraint solver
+- [Open CASCADE Technology](https://dev.opencascade.org/) (OCCT) for the B-rep modeling kernel
+
+## License
+
+Shashimi Slicer is licensed under the GNU Affero General Public License, version 3
+(AGPL-3.0), like the projects it is based on. See [LICENSE.txt](LICENSE.txt).
+
+---
+
+# Upstream OrcaSlicer README
+
 <div align="center">
 
 <picture>

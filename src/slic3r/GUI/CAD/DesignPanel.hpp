@@ -50,7 +50,18 @@ class DesignCanvas;
 class DesignPanel : public wxPanel, public LazyInstance<DesignPanel>
 {
 public:
+    // The two top-bar tabs this one panel is shown under (CadTabPage hosts it). Both show the
+    // same document, viewport and camera; the tab only picks the ribbon's tool set.
+    enum class WorkspaceTab { Sketch, Modeling };
+
     explicit DesignPanel(wxWindow* parent);
+    // Called by the hosting CadTabPage each time its tab is shown: stores the tab and runs
+    // on_workspace_tab_changed(). Never changes the UI mode.
+    void         set_workspace_tab(WorkspaceTab tab);
+    WorkspaceTab workspace_tab() const { return m_workspace_tab; }
+    // How the panel asks for the other tab when its UI mode moves to a mode that belongs there
+    // (Sketch/Constrain -> Sketch, Feature -> Modeling). MainFrame queues the tab selection.
+    void set_on_request_workspace_tab(std::function<void(WorkspaceTab)> cb) { m_on_request_workspace_tab = std::move(cb); }
     void on_tab_shown();        // re-sync bed to the active printer when the Design tab is activated
     void on_tab_hidden();       // another tab took over: take the viewport status line down with us
     void unbind_canvas_event_handlers();   // app close / language switch, from the plater's teardown
@@ -87,6 +98,11 @@ public:
     // Defined out of line in DesignPanel.cpp: it needs kOfferVerbs, which this header deliberately
     // does not include (the table is generated and belongs to the offer-menu code).
     bool mcp_run_verb(const char* verb_id);
+
+protected:
+    // Runs whenever set_workspace_tab() is called (every show of a CAD tab), with
+    // m_workspace_tab already updated. The ribbon switches its tool set here.
+    void on_workspace_tab_changed() {}
 
 private:
     enum class Tool { None, Sketch, Extrude, Dressup, Hole, Thread, Shell, Revolve, Sweep, Pattern, Plane, Loft, Draft, Boolean, Cut, Insert, Axis, CoordSys, SurfaceExtrude, SurfaceRevolve, SurfaceLoft, SurfaceFill, SurfaceOffset, ThickenSurface, Transform, Mirror, Thicken, Rib, Project, DeleteFace, Helix, Mate };
@@ -452,6 +468,10 @@ private:
 
     // Top contextual toolbar (parented to the panel, above the form/viewport row).
     UiMode    m_ui_mode{UiMode::Feature};
+    WorkspaceTab m_workspace_tab{WorkspaceTab::Modeling};
+    std::function<void(WorkspaceTab)> m_on_request_workspace_tab;
+    // Set while set_workspace_tab() runs, so nothing it triggers asks for a tab in turn.
+    bool      m_applying_workspace_tab{false};
     // Sketch environment banner: a strip across the top of the viewport saying, in words, that
     // this is a sketch and which one. The mode used to be legible only from the toolbar and the
     // left card — both of which look like the rest of the app — so a sketch session and plate

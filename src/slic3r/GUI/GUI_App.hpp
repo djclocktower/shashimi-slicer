@@ -357,7 +357,9 @@ public:
     bool            initialized() const { return m_initialized; }
     inline bool     is_enable_multi_machine() { return this->app_config&& this->app_config->get("enable_multi_machine") == "true"; }
 #ifdef SLIC3R_CAD
-    inline bool     is_enable_cad_feature() { return this->app_config && this->app_config->get_bool("enable_cad_feature"); }
+    // Shashimi: the CAD workspace (Sketch / Modeling tabs) is always on. The "enable_cad_feature"
+    // key stays in AppConfig for configs shared with OrcaSlicer, but nothing reads it.
+    inline bool     is_enable_cad_feature() { return true; }
     inline bool     is_auto_close_sketch_loops() { return !this->app_config
         || this->app_config->get_bool("auto_close_sketch_loops"); }
 #endif

@@ -237,7 +237,7 @@ bool GLGizmosManager::init()
 #ifdef SLIC3R_CAD
     // Registered last: Primitive and Sketch are the final entries before Undefined, so
     // omitting them leaves every preceding m_gizmos index (indexed by EType) untouched.
-    if (wxGetApp().is_enable_cad_feature()) {
+    if (wxGetApp().is_enable_cad_feature()) {   // always true in Shashimi
         m_gizmos.emplace_back(new GLGizmoPrimitive(m_parent, m_is_dark ? "toolbar_modifier_cube_dark.svg" : "toolbar_modifier_cube.svg", static_cast<unsigned int>(Primitive)));
         m_gizmos.emplace_back(new GLGizmoSketch(m_parent, m_is_dark ? "toolbar_sketch_dark.svg" : "toolbar_sketch.svg", static_cast<unsigned int>(Sketch)));
     }

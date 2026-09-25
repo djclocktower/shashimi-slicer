@@ -13,7 +13,7 @@
 #   IMAGE=orcacad-deps scripts/CAD/build-gui-incremental.sh
 #
 # On success the binary is inside the persistent volume at
-# /OrcaSlicer/build/package/bin/orca-slicer (copy it out with a follow-up
+# /OrcaSlicer/build/package/bin/shashimi-slicer (copy it out with a follow-up
 # `docker run --rm -v orcacad_buildcache:/b alpine cp ...` or via this script's tail).
 # Rig build traps already paid for once each (stale project, NLopt cache, pybind11, OCCT_LIBS, SLIC3R_CAD gate): docs/rig_build_traps.md
 set -euo pipefail
@@ -74,8 +74,8 @@ docker run --rm \
   "$IMAGE" \
   bash -lc "cd /OrcaSlicer && ./build_linux.sh -sr -j $JOBS"
 
-# src/CMakeLists.txt:151 renames the OrcaSlicer target's output to "orca-slicer" — not
+# src/CMakeLists.txt renames the OrcaSlicer target's output to "shashimi-slicer" — not
 # "snapmaker-orca", which is the other fork's binary name.
 echo "=== build finished; checking for binary ==="
 docker run --rm -v "$BUILD_VOL":/b "$IMAGE" \
-  bash -lc 'ls -lh /b/package/bin/orca-slicer 2>/dev/null && file /b/package/bin/orca-slicer || echo "NO BINARY"'
+  bash -lc 'ls -lh /b/package/bin/shashimi-slicer 2>/dev/null && file /b/package/bin/shashimi-slicer || echo "NO BINARY"'

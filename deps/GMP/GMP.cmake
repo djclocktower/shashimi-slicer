@@ -59,9 +59,12 @@ else ()
         set(_cross_compile_arg --host=${TOOLCHAIN_PREFIX})
     endif ()
 
-    ExternalProject_Add(dep_GMP
+    orcaslicer_github_via_git(_gmp_source
         URL https://github.com/SoftFever/OrcaSlicer_deps/releases/download/gmp-6.2.1/gmp-6.2.1.tar.bz2
         URL_HASH SHA256=eae9326beb4158c386e39a356818031bd28f3124cf915f8c5b1dc4c7a36b4d7c
+    )
+    ExternalProject_Add(dep_GMP
+        ${_gmp_source}
         DOWNLOAD_DIR ${DEP_DOWNLOAD_DIR}/GMP
         PATCH_COMMAND git apply ${GMP_DIRECTORY_FLAG} --verbose ${CMAKE_CURRENT_LIST_DIR}/0001-GMP_GCC15.patch
         BUILD_IN_SOURCE ON

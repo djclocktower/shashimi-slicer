@@ -185,8 +185,13 @@ them. `MainFrame::prebuild_pages_when_idle()` registers the tasks once, from
 `post_init()`.
 
 **Never prebuilt.** A holder with a negative order, for a tab that few sessions open
-and that costs more to build unasked than it saves (the Design tab), and plugin-provided
+and that costs more to build unasked than it saves (the CAD workspace), and plugin-provided
 tabs, which are Python-side and not lazy pages.
+
+The CAD workspace is the one holder that is not a `LazyPage`: its `DesignPanel` is shown
+under two tabs, Sketch and Modeling, so `CadWorkspace` (a `Lazy<DesignPanel>` owned by
+`MainFrame`) builds it inside whichever `CadTabPage` asks first, and each page moves it in
+from `Show()` while both pages are hidden (`src/slic3r/GUI/CAD/CadTabPage.hpp`).
 
 ## Adopting it
 

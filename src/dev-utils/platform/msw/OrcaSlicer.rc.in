@@ -7,13 +7,13 @@ PRODUCTVERSION @SLIC3R_VERSION@
   BLOCK "040904E4"
   {
    VALUE "CompanyName", "SoftFever"
-   VALUE "FileDescription", "@SLIC3R_APP_NAME@"
+   VALUE "FileDescription", "Shashimi Slicer"
    VALUE "FileVersion", "@SLIC3R_BUILD_ID@"
-   VALUE "ProductName", "@SLIC3R_APP_NAME@"
+   VALUE "ProductName", "Shashimi Slicer"
    VALUE "ProductVersion", "@SLIC3R_BUILD_ID@"
    VALUE "InternalName", "@SLIC3R_APP_NAME@"
    VALUE "LegalCopyright", ""
-   VALUE "OriginalFilename", "orca-slicer.exe"
+   VALUE "OriginalFilename", "ShashimiSlicer.exe"
   }
  }
  BLOCK "VarFileInfo"

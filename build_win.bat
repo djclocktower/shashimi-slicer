@@ -794,16 +794,16 @@ REM worked out the same way in either run.
 :summary
     for %%p in ("!DEP_TREE!") do set "dep_full=%%~fp"
     REM The binary only leaves the build tree when it is installed.
-    set "slicer_exe=%build_dir%\src\%build_type%\orca-slicer.exe"
-    if "%install_slicer%" == "ON" set "slicer_exe=%build_dir%\OrcaSlicer\orca-slicer.exe"
+    set "slicer_exe=%build_dir%\src\%build_type%\ShashimiSlicer.exe"
+    if "%install_slicer%" == "ON" set "slicer_exe=%build_dir%\OrcaSlicer\ShashimiSlicer.exe"
     for %%p in ("!slicer_exe!") do set "slicer_full=%%~fp"
-    REM The 2026 generator writes OrcaSlicer.slnx, the releases before it
-    REM OrcaSlicer.sln. A file already there wins, in case an older CMake
+    REM The 2026 generator writes ShashimiSlicer.slnx, the releases before it
+    REM ShashimiSlicer.sln. A file already there wins, in case an older CMake
     REM configured the build.
-    set "solution=OrcaSlicer.sln"
-    if "%vs_version%" == "2026" set "solution=OrcaSlicer.slnx"
-    if exist "!build_full!\OrcaSlicer.sln" set "solution=OrcaSlicer.sln"
-    if exist "!build_full!\OrcaSlicer.slnx" set "solution=OrcaSlicer.slnx"
+    set "solution=ShashimiSlicer.sln"
+    if "%vs_version%" == "2026" set "solution=ShashimiSlicer.slnx"
+    if exist "!build_full!\ShashimiSlicer.sln" set "solution=ShashimiSlicer.sln"
+    if exist "!build_full!\ShashimiSlicer.slnx" set "solution=ShashimiSlicer.slnx"
 
     REM Naming a target builds it and its dependencies, not its dependents,
     REM so only a full build or the executable's own target relinks.

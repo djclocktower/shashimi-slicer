@@ -330,7 +330,7 @@ void DesktopIntegrationDialog::perform_desktop_integration()
             // Write slicer desktop file
             std::string desktop_file = GUI::format(
                 "[Desktop Entry]\n"
-                "Name=OrcaSlicer%1%\n"
+                "Name=Shashimi Slicer%1%\n"
                 "GenericName=3D Printing Software\n"
                 "Icon=OrcaSlicer%2%\n"
                 "Exec=\"%3%\" %%F\n"
@@ -342,7 +342,7 @@ void DesktopIntegrationDialog::perform_desktop_integration()
                 "Categories=Graphics;3DGraphics;Engineering;\n"
                 "Keywords=3D;Printing;Slicer;slice;3D;printer;convert;gcode;stl;obj;amf;SLA\n"
                 "StartupNotify=false\n"
-                "StartupWMClass=orca-slicer\n", name_suffix, version_suffix, excutable_path);
+                "StartupWMClass=shashimi-slicer\n", name_suffix, version_suffix, excutable_path);
 
             std::string path = GUI::format("%1%/applications/com.orcaslicer.OrcaSlicer%2%.desktop", target_dir_desktop, version_suffix);
             if (create_desktop_file(path, desktop_file)){

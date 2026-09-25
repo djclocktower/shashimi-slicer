@@ -163,8 +163,144 @@ if (NOT _is_multi AND NOT CMAKE_BUILD_TYPE)
     message(STATUS "Forcing CMAKE_BUILD_TYPE to Release as it was not specified.")
 endif ()
 
+# ORCA_DEPS_GITHUB_VIA_GIT (opt-in, default OFF; OFF changes nothing below).
+#
+# For networks that allow `git clone` from github.com but block HTTP downloads of
+# GitHub source archives and release assets. When ON, orcaslicer_github_via_git()
+# rewrites the download arguments of every dependency whose first URL is
+#   https://github.com/<org>/<repo>/archive/[refs/(tags|heads)/]<ref>.(zip|tar.gz)
+#     -> GIT_REPOSITORY https://github.com/<org>/<repo>.git GIT_TAG <ref>
+#        GIT_SHALLOW TRUE (dropped for a commit sha, or when `git ls-remote` does
+#        not list <ref> as a tag/branch, so it falls back to a full clone)
+#        and no submodules, matching what the archive contained;
+#   https://github.com/<org>/<repo>/releases/download/<tag>/<asset>
+#     -> the same repo at <tag> plus all submodules (shallow, recursive): release
+#        assets such as Boost's are bundled source tarballs made from the
+#        superproject and its submodules;
+# unless ORCA_DEPS_GITHUB_ASSET_MIRRORS maps the URL to a byte-identical upstream
+# copy, which keeps URL_HASH verification (for assets that re-host a tarball).
+# URL_HASH, DOWNLOAD_NAME and any old GIT_TAG are dropped for git sources. A git
+# clone is its own repository, so `git apply --directory <path from the OrcaSlicer
+# root>` (the IN_GIT_REPO flags) would point outside it; that option is dropped
+# too, leaving the patch relative to the source dir it was written against.
+# UPDATE_DISCONNECTED keeps the patch step from re-running on every build.
+option(ORCA_DEPS_GITHUB_VIA_GIT "Fetch GitHub-hosted dependency sources with git clone instead of HTTP archive downloads" OFF)
+if (ORCA_DEPS_GITHUB_VIA_GIT)
+    set(ORCA_DEPS_GITHUB_ASSET_MIRRORS
+        "https://github.com/SoftFever/orca_deps/releases/download/freetype-2.12.1.tar.gz/freetype-2.12.1.tar.gz=https://download.savannah.gnu.org/releases/freetype/freetype-2.12.1.tar.gz"
+        "https://github.com/SoftFever/OrcaSlicer_deps/releases/download/gmp-6.2.1/gmp-6.2.1.tar.bz2=https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.bz2"
+    )
+endif ()
+
+# orcaslicer_github_via_git(<out_var> <ExternalProject args>...)
+# Sets <out_var> to the args, rewritten as described above when the option is ON,
+# and <out_var>_SUBMODULES to TRUE when the caller must add the submodule step
+# (orcaslicer_add_cmake_project does).
+function(orcaslicer_github_via_git out_var)
+    set(_args ${ARGN})
+    set(${out_var}_SUBMODULES FALSE PARENT_SCOPE)
+    list(FIND _args URL _url_idx)
+    if (NOT ORCA_DEPS_GITHUB_VIA_GIT OR _url_idx LESS 0)
+        set(${out_var} "${_args}" PARENT_SCOPE)
+        return()
+    endif ()
+    math(EXPR _url_idx "${_url_idx} + 1")
+    list(GET _args ${_url_idx} _url)
+
+    foreach (_mirror IN LISTS ORCA_DEPS_GITHUB_ASSET_MIRRORS)
+        string(FIND "${_mirror}" "=" _eq)
+        string(SUBSTRING "${_mirror}" 0 ${_eq} _from)
+        if (_url STREQUAL _from)
+            math(EXPR _eq "${_eq} + 1")
+            string(SUBSTRING "${_mirror}" ${_eq} -1 _to)
+            list(REMOVE_AT _args ${_url_idx})
+            list(INSERT _args ${_url_idx} "${_to}")
+            message(STATUS "ORCA_DEPS_GITHUB_VIA_GIT: ${_url} -> ${_to}")
+            set(${out_var} "${_args}" PARENT_SCOPE)
+            return()
+        endif ()
+    endforeach ()
+
+    set(_submodules FALSE)
+    if (_url MATCHES "^https://github\\.com/([^/]+)/([^/]+)/archive/(refs/(tags|heads)/)?(.+)\\.(zip|tar\\.gz)$")
+        set(_ref "${CMAKE_MATCH_5}")
+    elseif (_url MATCHES "^https://github\\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/")
+        set(_ref "${CMAKE_MATCH_3}")
+        set(_submodules TRUE)
+    else ()
+        set(${out_var} "${_args}" PARENT_SCOPE)
+        return()
+    endif ()
+    set(_repo "https://github.com/${CMAKE_MATCH_1}/${CMAKE_MATCH_2}.git")
+
+    # Shallow clones need a named ref. Ask the remote once and cache the answer.
+    set(_shallow FALSE)
+    string(LENGTH "${_ref}" _ref_len)
+    if (NOT (_ref_len EQUAL 40 AND _ref MATCHES "^[0-9a-fA-F]+$"))
+        string(MAKE_C_IDENTIFIER "ORCA_GH_REF_${CMAKE_MATCH_1}_${CMAKE_MATCH_2}_${_ref}" _cache)
+        if (NOT DEFINED ${_cache})
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} ls-remote --exit-code ${_repo} refs/tags/${_ref} refs/heads/${_ref}
+                RESULT_VARIABLE _rc OUTPUT_QUIET ERROR_QUIET TIMEOUT 60)
+            # rc 2: the remote answered without the ref. Anything else (e.g. no
+            # network at configure time) is treated as a named ref.
+            if (_rc EQUAL 2)
+                set(${_cache} FALSE CACHE INTERNAL "")
+            else ()
+                set(${_cache} TRUE CACHE INTERNAL "")
+            endif ()
+        endif ()
+        set(_shallow ${${_cache}})
+    endif ()
+
+    # Drop the URL download options (and their values) and `--directory <dir>`.
+    set(_drop URL URL_HASH URL_MD5 DOWNLOAD_NAME DOWNLOAD_EXTRACT_TIMESTAMP GIT_TAG)
+    set(_out "")
+    set(_skip FALSE)
+    set(_skip_next FALSE)
+    foreach (_arg IN LISTS _args)
+        if (_skip_next)
+            set(_skip_next FALSE)
+            continue()
+        endif ()
+        if (_arg STREQUAL "--directory")
+            set(_skip_next TRUE)
+            continue()
+        endif ()
+        if (_arg MATCHES "^[A-Z][A-Z0-9_][A-Z0-9_]+$" AND NOT _arg MATCHES "^(TRUE|FALSE|ON|OFF)$")
+            list(FIND _drop "${_arg}" _i)
+            if (_i GREATER -1)
+                set(_skip TRUE)
+                continue()
+            endif ()
+            set(_skip FALSE)
+        endif ()
+        if (NOT _skip)
+            list(APPEND _out "${_arg}")
+        endif ()
+    endforeach ()
+
+    # submodule.active names no path, so the clone initializes no submodules;
+    # the step added for _submodules overrides it.
+    list(APPEND _out
+        GIT_REPOSITORY ${_repo}
+        GIT_TAG ${_ref}
+        GIT_PROGRESS FALSE
+        GIT_CONFIG submodule.active=.orca-no-submodules
+        UPDATE_DISCONNECTED TRUE)
+    if (_shallow)
+        list(APPEND _out GIT_SHALLOW TRUE)
+    endif ()
+    message(STATUS "ORCA_DEPS_GITHUB_VIA_GIT: ${_url} -> git ${_repo} @ ${_ref} (shallow: ${_shallow}, submodules: ${_submodules})")
+    set(${out_var} "${_out}" PARENT_SCOPE)
+    set(${out_var}_SUBMODULES ${_submodules} PARENT_SCOPE)
+endfunction()
+
 function(orcaslicer_add_cmake_project projectname)
     cmake_parse_arguments(P_ARGS "FORWARD_CONFIG" "INSTALL_DIR;BUILD_COMMAND;INSTALL_COMMAND" "CMAKE_ARGS" ${ARGN})
+    if (ORCA_DEPS_GITHUB_VIA_GIT)
+        orcaslicer_github_via_git(P_ARGS_UNPARSED_ARGUMENTS ${P_ARGS_UNPARSED_ARGUMENTS})
+    endif ()
 
     # MSVC is true for clang-cl as well, so the sub-build toolchain has to key on the
     # generator. A non-Visual-Studio superbuild passes its own generator down, and with
@@ -288,6 +424,24 @@ else()
     )
 
 endif()
+
+    if (P_ARGS_UNPARSED_ARGUMENTS_SUBMODULES)
+        # ORCA_DEPS_GITHUB_VIA_GIT, release-asset source: fetch the submodules the
+        # bundled tarball contained, shallow (the clone itself initialized none).
+        # Ordered after the git update step and before the patch step, whose names
+        # gained a _disconnected suffix in CMake 3.27.
+        set(_disc "")
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.27)
+            set(_disc "_disconnected")
+        endif ()
+        ExternalProject_Add_Step(dep_${projectname} orca_git_submodules
+            DEPENDEES update${_disc}
+            DEPENDERS patch${_disc}
+            COMMENT "Fetching git submodules for dep_${projectname}"
+            COMMAND ${GIT_EXECUTABLE} -c submodule.active=. submodule update --init --recursive --depth 1 --jobs 8
+            WORKING_DIRECTORY <SOURCE_DIR>
+        )
+    endif ()
 
 endfunction(orcaslicer_add_cmake_project)
 

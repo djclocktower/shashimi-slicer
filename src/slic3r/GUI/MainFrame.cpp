@@ -39,6 +39,7 @@
 #include "GLCanvas3D.hpp"
 #include "Plater.hpp"
 #ifdef SLIC3R_CAD
+#include "slic3r/GUI/CAD/CadTabPage.hpp"
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
 #include "slic3r/GUI/CAD/McpControl.hpp"
 #endif
@@ -415,7 +416,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     default:
     case GUI_App::EAppMode::Editor:
         m_taskbar_icon = std::make_unique<OrcaSlicerTaskBarIcon>(wxTBI_DOCK);
-        m_taskbar_icon->SetIcon(wxIcon(Slic3r::var("OrcaSlicer-mac_256px.ico"), wxBITMAP_TYPE_ICO), "OrcaSlicer");
+        m_taskbar_icon->SetIcon(wxIcon(Slic3r::var("OrcaSlicer-mac_256px.ico"), wxBITMAP_TYPE_ICO), SLIC3R_APP_FULL_NAME);
         break;
     case GUI_App::EAppMode::GCodeViewer:
         break;
@@ -1011,6 +1012,8 @@ WXLRESULT MainFrame::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lParam
 
 #endif
 
+MainFrame::~MainFrame() = default;
+
 void  MainFrame::show_log_window()
 {
     m_log_window = new wxLogWindow(this, _L("Logging"), true, false);
@@ -1089,11 +1092,13 @@ void MainFrame::update_layout()
         const int home_idx = m_tabpanel->FindPageByName(TAB_ID_HOME);
         size_t prepare_pos = (home_idx == wxNOT_FOUND) ? 0 : static_cast<size_t>(home_idx) + 1;
 #ifdef SLIC3R_CAD
-        // Design sits between Home and Prepare, so it goes in first and pushes Prepare along.
-        // The page only exists when the experimental CAD feature is enabled.
-        if (m_design_page != nullptr) {
-            m_design_page->Reparent(m_tabpanel);
-            m_tabpanel->InsertPage(prepare_pos++, TAB_ID_DESIGN, m_design_page, _L("Design"), "tab_design_active");
+        // Sketch and Modeling sit between Home and Prepare, so they go in first and push
+        // Prepare along.
+        if (m_sketch_tab != nullptr && m_modeling_tab != nullptr) {
+            m_sketch_tab->Reparent(m_tabpanel);
+            m_modeling_tab->Reparent(m_tabpanel);
+            m_tabpanel->InsertPage(prepare_pos++, TAB_ID_SKETCH, m_sketch_tab, _L("Sketch"), "tab_sketch_active");
+            m_tabpanel->InsertPage(prepare_pos++, TAB_ID_MODELING, m_modeling_tab, _L("Modeling"), "tab_modeling_active");
         }
 #endif
         m_tabpanel->InsertPage(prepare_pos, TAB_ID_PREPARE, m_plater, _L("Prepare"), "tab_3d_active");
@@ -1357,21 +1362,26 @@ void MainFrame::init_tabpanel() {
         //else if (panel == m_param_panel)
         //    m_param_panel->OnActivate();
 #ifdef SLIC3R_CAD
-        else if (m_design_page != nullptr && panel == m_design_page) {
-            // Re-sync the Design bed to the active printer: the panel is built before the
-            // printer profile is fully applied, so its bed must refresh on activation or the
-            // grid (true bed) spills past the stale default bed quad.
-            DesignPanel::ensure()->on_tab_shown();
+        else if (panel != nullptr && (panel == m_sketch_tab || panel == m_modeling_tab)) {
+            // Moves the shared CAD workspace onto this page (Show() normally has already) and
+            // switches its ribbon to this tab. Entering from a non-CAD page also re-syncs the
+            // bed to the active printer: the panel is built before the printer profile is fully
+            // applied, so its bed must refresh on activation or the grid (true bed) spills past
+            // the stale default bed quad.
+            static_cast<CadTabPage*>(panel)->show_workspace();
         }
 #endif
         else if (panel == m_monitor_page) {
             //monitor
         }
 #ifdef SLIC3R_CAD
-        // Any page that is not Design takes the Design status line down with it — see
+        // Any page that is not a CAD tab takes the CAD status line down with it — see
         // DesignPanel::on_tab_hidden for why the popup does not follow the page on its own.
-        if (DesignPanel* design = DesignPanel::if_built(); design != nullptr && panel != m_design_page)
-            design->on_tab_hidden();
+        if (m_sketch_tab != nullptr && panel != m_sketch_tab && panel != m_modeling_tab) {
+            m_sketch_tab->hide_workspace();
+            if (DesignPanel* design = DesignPanel::if_built())
+                design->on_tab_hidden();
+        }
 #endif
 #ifndef __APPLE__
         if (m_last_selected_tab == TAB_ID_PREPARE) {
@@ -1405,15 +1415,20 @@ void MainFrame::init_tabpanel() {
     wxGetApp().plater_ = m_plater;
 
 #ifdef SLIC3R_CAD
-    // The experimental feature is off by default, and when it is off the page is never
-    // created, so the tab does not appear at all (the preference takes effect on the next
-    // start, like the other feature toggles).
-    if (wxGetApp().is_enable_cad_feature()) {
-        // Experimental and heavy enough that building it unasked would cost more than it saves.
-        m_design_page = new LazyPage<DesignPanel>(this, TAB_ID_DESIGN, -1);
-        m_lazy_pages.push_back(m_design_page);
-        start_mcp_control_if_enabled();   // opens the MCP socket iff ORCA_CAD_MCP is set
-    }
+    // The CAD workspace is always on. Its panel is heavy enough that building it unasked
+    // would cost more than it saves, so it is built when a CAD tab is first shown (the
+    // holder's prebuild order is negative and it is not registered for idle prebuild).
+    m_cad_workspace = std::make_unique<CadWorkspace>();
+    m_sketch_tab    = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Sketch);
+    m_modeling_tab  = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Modeling);
+    // A mode change inside the workspace (starting or finishing a sketch) asks for the tab it
+    // belongs to. Queued: it fires from inside the panel's own event handlers.
+    DesignPanel::when_built([this](DesignPanel& design) {
+        design.set_on_request_workspace_tab([this](DesignPanel::WorkspaceTab tab) {
+            request_select_tab(tab == DesignPanel::WorkspaceTab::Sketch ? TAB_ID_SKETCH : TAB_ID_MODELING);
+        });
+    });
+    start_mcp_control_if_enabled();   // opens the MCP socket iff ORCA_CAD_MCP is set
 #endif
 
     create_preset_tabs();

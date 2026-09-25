@@ -3,17 +3,18 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
-  <string>@SLIC3R_APP_KEY@</string>
+  <!-- The executable is the OrcaSlicer target, which has no macOS OUTPUT_NAME. -->
+  <string>OrcaSlicer</string>
   <key>CFBundleGetInfoString</key>
-  <string>@SLIC3R_APP_NAME@ Copyright(C) 2026 OrcaSlicer Pte Ltd All Rights Reserved</string>
+  <string>Shashimi Slicer, based on OrcaSlicer. Copyright(C) 2026 OrcaSlicer Pte Ltd All Rights Reserved</string>
   <key>CFBundleIconFile</key>
   <string>images/OrcaSlicer.icns</string>
   <key>CFBundleName</key>
-  <string>@SLIC3R_APP_KEY@</string>
+  <string>Shashimi Slicer</string>
   <key>CFBundleShortVersionString</key>
   <string>@SLIC3R_APP_NAME@ @SLIC3R_BUILD_ID@</string>
   <key>CFBundleIdentifier</key>
-  <string>com.orcaslicer.OrcaSlicer</string>
+  <string>com.shashimislicer.ShashimiSlicer</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>

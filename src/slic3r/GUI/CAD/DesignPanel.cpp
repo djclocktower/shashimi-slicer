@@ -4445,8 +4445,23 @@ void DesignPanel::apply_dof_status(int dof, bool ok, bool has_constraints)
     update_cards_frame(); m_form->Layout();
 }
 
+void DesignPanel::set_workspace_tab(WorkspaceTab tab)
+{
+    m_workspace_tab = tab;
+    m_applying_workspace_tab = true;
+    on_workspace_tab_changed();
+    m_applying_workspace_tab = false;
+}
+
 void DesignPanel::set_ui_mode(UiMode m)
 {
+    // A mode change that belongs to the other CAD tab asks for that tab. Only on a real change
+    // and only while the workspace is on screen: many paths re-assert Feature (and New Project
+    // cancels a sketch from Prepare), and none of those may pull the user onto a CAD tab.
+    const WorkspaceTab wanted = (m == UiMode::Feature) ? WorkspaceTab::Modeling : WorkspaceTab::Sketch;
+    if (m != m_ui_mode && wanted != m_workspace_tab && !m_applying_workspace_tab
+        && m_on_request_workspace_tab && IsShownOnScreen())
+        m_on_request_workspace_tab(wanted);
     m_ui_mode = m;
     if (m != UiMode::Sketch) m_sketch_on.clear();   // no stale "on the picked face" on the next hint
     // The DoF readout describes a SKETCH's constraint state, so it means nothing back in Feature
@@ -6464,7 +6479,7 @@ void DesignPanel::show_offer_menu(const wxPoint& screen_pos)
     // means these strings are translated by OUR catalogue or not at all, which is consistent
     // either way.
     auto tr = [](const char* s) {
-        return wxGetTranslation(wxString::FromUTF8(s), SLIC3R_APP_KEY);
+        return wxGetTranslation(wxString::FromUTF8(s), SLIC3R_L10N_DOMAIN);
     };
     auto label = [&](const OfferVerb& v) {
         wxString s = tr(v.name);

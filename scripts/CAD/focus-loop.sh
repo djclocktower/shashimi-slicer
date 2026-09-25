@@ -31,7 +31,7 @@ DISP="${DISP:-:10}"
 SRC="${SRC:-\$HOME/projects/orca/orcacad-native/src}"
 TRACE="${TRACE:-/tmp/ux-focus-loop.log}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="build/src/Release/orca-slicer"
+BIN="build/src/Release/shashimi-slicer"
 
 say() { printf '\n=== %s\n' "$*"; }
 die() { printf 'GATE FAILED: %s\n' "$*" >&2; exit 1; }

@@ -331,8 +331,8 @@ void AppConfig::set_defaults()
         set_bool("zoom_to_mouse", false);
 
 #ifdef SLIC3R_CAD
-    // Experimental parametric Design tab. Off by default: the tab is not created at all
-    // until this is turned on, so nothing it builds reaches an unsuspecting user.
+    // Upstream's switch for the parametric Design tab. Shashimi always shows its CAD tabs and
+    // no longer reads this; it is kept so a config shared with OrcaSlicer round-trips.
     if (get("enable_cad_feature").empty())
         set_bool("enable_cad_feature", false);
 
