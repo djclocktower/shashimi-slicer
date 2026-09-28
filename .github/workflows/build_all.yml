@@ -6,6 +6,7 @@ on:
      - main
      - release/*
      - belt-printer
+     - shashimi
     paths:
      - 'deps/**'
      - 'src/**'
@@ -53,12 +54,19 @@ on:
         description: 'Only build dependencies (bypasses caching)'
         type: boolean
         default: false
+      all-platforms:
+        description: 'Also build Linux, macOS, Flatpak and Windows arm64 (otherwise Windows x64 only)'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
   
 
+# Shashimi builds Windows x64 only. Every other platform, and the jobs that
+# consume its build, is gated on the all-platforms dispatch input, which is
+# unset (false) on push and schedule runs.
 jobs:
   # build_win.bat ships a test suite. Run it before the Windows builds.
   check_build_script:
@@ -87,7 +95,7 @@ jobs:
           && '[{"arch":"","os":"orca-lnx-server"}]'
           || '[{"arch":"","os":"ubuntu-24.04"},{"arch":"aarch64","os":"ubuntu-24.04-arm"}]') }}
     # Don't run scheduled builds on forks:
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
+    if: ${{ !cancelled() && inputs.all-platforms && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
     uses: ./.github/workflows/build_check_cache.yml
     with:
       os: ${{ matrix.os }}
@@ -102,7 +110,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(vars.SELF_HOSTED
           && '[{"arch":"x64","os":"orca-win-server","compiler":"clang"}]'
-          || '[{"arch":"x64","os":"windows-latest","compiler":"clang"},{"arch":"arm64","os":"windows-11-vs2026-arm","compiler":"clang"}]') }}
+          || inputs.all-platforms
+          && '[{"arch":"x64","os":"windows-latest","compiler":"clang"},{"arch":"arm64","os":"windows-11-vs2026-arm","compiler":"clang"}]'
+          || '[{"arch":"x64","os":"windows-latest","compiler":"clang"}]') }}
     needs: check_build_script
     # Don't run scheduled builds on forks:
     if: ${{ !cancelled() && needs.check_build_script.result == 'success' && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
@@ -122,7 +132,7 @@ jobs:
           - arm64
           - x86_64
     # Don't run scheduled builds on forks:
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
+    if: ${{ !cancelled() && inputs.all-platforms && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
     uses: ./.github/workflows/build_check_cache.yml
     with:
       os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || 'macos-14' }}
@@ -144,7 +154,7 @@ jobs:
   unit_tests_linux_x86_64:
     name: Linux x86_64
     needs: build_linux
-    if: ${{ !cancelled() && success() }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms }}
     uses: ./.github/workflows/unit_tests.yml
     with:
       os: ${{ vars.SELF_HOSTED && 'orca-lnx-server' || 'ubuntu-24.04' }}
@@ -152,7 +162,7 @@ jobs:
   unit_tests_linux_aarch64:
     name: Linux aarch64
     needs: build_linux
-    if: ${{ !cancelled() && success() && !vars.SELF_HOSTED }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms && !vars.SELF_HOSTED }}
     uses: ./.github/workflows/unit_tests.yml
     with:
       os: ubuntu-24.04-arm
@@ -168,7 +178,7 @@ jobs:
   unit_tests_windows_arm64:
     name: Windows arm64
     needs: build_windows
-    if: ${{ !cancelled() && success() && !vars.SELF_HOSTED }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms && !vars.SELF_HOSTED }}
     uses: ./.github/workflows/unit_tests.yml
     with:
       os: windows-11-vs2026-arm
@@ -177,7 +187,7 @@ jobs:
   unit_tests_macos_arm64:
     name: macOS arm64
     needs: build_macos_arch
-    if: ${{ !cancelled() && success() }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms }}
     uses: ./.github/workflows/unit_tests.yml
     with:
       os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || 'macos-14' }}
@@ -191,7 +201,7 @@ jobs:
   slice_check_linux:
     name: Slice check (Linux ${{ vars.SELF_HOSTED && 'x86_64' || 'aarch64' }})
     needs: build_linux
-    if: ${{ !cancelled() && success() }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms }}
     # Follows whichever Linux leg built the validator.
     runs-on: ${{ vars.SELF_HOSTED && 'orca-lnx-server' || 'ubuntu-24.04-arm' }}
     steps:
@@ -251,7 +261,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     # Don't run scheduled builds on forks; skip entirely on self-hosted runners
-    if: ${{ !cancelled() && !vars.SELF_HOSTED && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
+    if: ${{ !cancelled() && !vars.SELF_HOSTED && inputs.all-platforms && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
 
     runs-on: ${{ matrix.variant.runner }}
     env:
@@ -477,7 +487,7 @@ jobs:
   unit_tests_flatpak_x86_64:
     name: Flatpak x86_64
     needs: flatpak
-    if: ${{ !cancelled() && success() }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms }}
     uses: ./.github/workflows/unit_tests_flatpak.yml
     with:
       os: ubuntu-24.04
@@ -485,7 +495,7 @@ jobs:
   unit_tests_flatpak_aarch64:
     name: Flatpak aarch64
     needs: flatpak
-    if: ${{ !cancelled() && success() }}
+    if: ${{ !cancelled() && success() && inputs.all-platforms }}
     uses: ./.github/workflows/unit_tests_flatpak.yml
     with:
       os: ubuntu-24.04-arm
