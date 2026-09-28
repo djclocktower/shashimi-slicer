@@ -37,6 +37,7 @@
 #include <wx/image.h>
 #include <wx/imaglist.h>
 #include <wx/listbox.h>
+#include <wx/progdlg.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/radiobut.h>
@@ -54,6 +55,8 @@
 #include <wx/utils.h>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -314,7 +317,6 @@ struct CamController::Impl
     CamModel         model;
     bool             model_dirty{true};
     uint64_t         model_gen{UINT64_MAX};
-    std::vector<char> stale;   // parallel to doc.operations: geometry or setup changed since generation
 
     std::vector<MachineProfile> machines;
     std::vector<CamTool>        library;
@@ -400,6 +402,8 @@ struct CamController::Impl
     wxSpinCtrlDouble *o_wrap_r{}, *o_a_step{};
     wxChoice*         o_wrap_strategy{nullptr};
     wxCheckBox*       o_spiral{nullptr};
+    wxCheckBox*       o_bidir{nullptr};
+    wxSizer*          o_geom_group{nullptr};
     wxChoice*         o_entry{nullptr};
     wxSpinCtrlDouble *o_ramp_angle{}, *o_helix_d{}, *o_lead_r{};
     wxCheckBox*       o_rest{nullptr};
@@ -424,6 +428,9 @@ struct CamController::Impl
     std::chrono::steady_clock::time_point sim_last_tick;
     double   sim_since_mesh{0};
     StockSim stocksim;
+    // Copies of the stock taken while cutting forward, every ~5 % of the moves (index = moves cut),
+    // so a backward scrub restarts from the nearest one instead of from fresh stock.
+    std::map<size_t, StockSim> sim_snapshots;
     size_t   sim_cut_upto{0};   // moves [0, sim_cut_upto) are cut into stocksim
     bool     sim_stock_ok{false};
     TriangleMesh sim_mesh;
@@ -442,7 +449,6 @@ struct CamController::Impl
     void status(const wxString& text, bool error = false);
     void sync_recipe();
     void ops_resized();
-    void mark_stale_all();
     bool ensure_model();
     const MachineProfile& machine_of(int setup) const;
     CAM::Material              material_of(int setup) const;
@@ -609,13 +615,7 @@ void CamController::Impl::sync_recipe()
 void CamController::Impl::ops_resized()
 {
     if (doc.paths.size() != doc.operations.size()) doc.paths.resize(doc.operations.size());
-    if (stale.size() != doc.operations.size()) stale.resize(doc.operations.size(), 1);
     gl_dirty = true;
-}
-
-void CamController::Impl::mark_stale_all()
-{
-    stale.assign(doc.operations.size(), 1);
 }
 
 bool CamController::Impl::ensure_model()
@@ -736,10 +736,8 @@ CamController::Impl::OpState CamController::Impl::op_state(int i) const
     if (i < 0 || i >= int(doc.operations.size())) return OpState::Stale;
     if (!doc.operations[i].enabled) return OpState::Suppressed;
     if (i >= int(doc.paths.size())) return OpState::Stale;
-    const Toolpath& tp = doc.paths[i];
-    if (!tp.error.empty()) return OpState::Error;
-    if ((i < int(stale.size()) && stale[i]) || tp.moves.empty()) return OpState::Stale;
-    return OpState::Ok;
+    if (doc.is_stale(i)) return OpState::Stale;
+    return doc.paths[i].ok() ? OpState::Ok : OpState::Error;
 }
 
 void CamController::Impl::rebuild_tree()
@@ -1184,7 +1182,7 @@ bool CamController::Impl::confirm_setup()
     if (idx >= 0 && idx < int(doc.setups.size())) {
         doc.setups[idx] = draft_setup;
         for (int i = 0; i < int(doc.operations.size()); ++i)
-            if (doc.operations[i].setup_index == idx && i < int(stale.size())) stale[i] = 1;
+            if (doc.operations[i].setup_index == idx) doc.invalidate(i);
     } else {
         idx = doc.add_setup(draft_setup);
     }
@@ -1265,6 +1263,7 @@ void CamController::Impl::build_op_page()
 
     // Geometry
     auto gg = group(_L("Geometry"), true);
+    o_geom_group = gg.first;
     o_geom_hint = new wxStaticText(pg, wxID_ANY, wxEmptyString);
     o_geom_hint->SetForegroundColour(CadTheme::text_dim());
     add_row(gg, wxEmptyString, {o_geom_hint}, kAllOps);
@@ -1304,7 +1303,7 @@ void CamController::Impl::build_op_page()
     o_holes_auto->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) { apply_op_rows(); });
     o_hole_min = make_spin(pg, 0, 1000, 2, 0.5);
     o_hole_max = make_spin(pg, 0, 1000, 2, 0.5);
-    add_row(gg, _L("Diameter from / to"), {o_hole_min, o_hole_max}, bits(T::Drill, T::Bore), [this] { return o_holes_auto->GetValue(); });
+    add_row(gg, _L("Hole diameter from / to (0 = any)"), {o_hole_min, o_hole_max}, bits(T::Drill, T::Bore));
 
     // Heights
     auto gh = group(_L("Heights"), true);
@@ -1366,6 +1365,9 @@ void CamController::Impl::build_op_page()
     o_spiral = new wxCheckBox(pg, wxID_ANY, _L("Spiral instead of passes"));
     o_spiral->SetForegroundColour(CadTheme::text());
     add_row(gp, wxEmptyString, {o_spiral}, bit(T::RotaryFinish));
+    o_bidir = new wxCheckBox(pg, wxID_ANY, _L("Cut in both directions (zig-zag)"));
+    o_bidir->SetForegroundColour(CadTheme::text());
+    add_row(gp, wxEmptyString, {o_bidir}, bits(T::Parallel3D, T::RotaryFinish));
     o_tol = make_spin(pg, 0.0001, 1, 4, 0.005);
     add_row(gp, _L("Tolerance mm"), {o_tol}, ~bit(T::Drill));
 
@@ -1488,8 +1490,9 @@ void CamController::Impl::load_op_page(const CamOperation& op)
     o_geom_hint->SetLabel(CadPropertyManager::wrap_text(o_geom_hint, _L(op_info(op.type).hint), op_page->FromDIP(250)));
     o_whole->SetValue(op.geom.whole_model);
     o_holes_auto->SetValue(op.geom.whole_model);
-    o_hole_min->SetValue(0);
-    o_hole_max->SetValue(0);
+    o_hole_min->SetValue(op.hole_diameter_min);
+    o_hole_max->SetValue(op.hole_diameter_max);
+    o_bidir->SetValue(op.bidirectional);
     const Height* hs[4] = {&op.heights.clearance, &op.heights.retract, &op.heights.top, &op.heights.bottom};
     for (int i = 0; i < 4; ++i) { o_href[i]->SetSelection(int(hs[i]->ref)); o_hoff[i]->SetValue(hs[i]->offset); }
     o_stepover->SetValue(op.stepover);
@@ -1573,6 +1576,9 @@ void CamController::Impl::read_op_page(CamOperation& op) const
     op.lift_height      = o_lift->GetValue();
     op.min_stepdown     = o_min_sd->GetValue();
     op.helix_angle_deg  = o_helix_angle->GetValue();
+    op.hole_diameter_min = o_hole_min->GetValue();
+    op.hole_diameter_max = o_hole_max->GetValue();
+    op.bidirectional     = o_bidir->GetValue();
 }
 
 void CamController::Impl::open_op(int index, OpType type_for_new)
@@ -1629,30 +1635,21 @@ bool CamController::Impl::confirm_op()
     int number = draft_op.tool_number;
     ensure_tool_in_doc(tool_list[ti], number);
     draft_op.tool_number = number;
-    // Drill / Bore with a diameter filter: the auto-detected holes in range become the selection.
-    if ((draft_op.type == OpType::Drill || draft_op.type == OpType::Bore) && draft_op.geom.whole_model
-        && (o_hole_min->GetValue() > 0 || o_hole_max->GetValue() > 0)) {
-        const double lo = o_hole_min->GetValue(), hi = o_hole_max->GetValue() > 0 ? o_hole_max->GetValue() : 1e9;
-        try {
-            const std::vector<HoleFeature> holes = holes_for_op(doc, draft_op, model);
-            draft_op.geom.whole_model = false;
-            draft_op.geom.faces.clear();
-            for (const HoleFeature& h : holes)
-                if (h.diameter >= lo - 1e-6 && h.diameter <= hi + 1e-6 && h.face >= 0) draft_op.geom.faces.push_back({h.body, h.face});
-        } catch (...) {}
-    }
     int idx = edit_op;
     if (idx >= 0 && idx < int(doc.operations.size())) {
         doc.operations[idx] = draft_op;
     } else {
         idx = doc.add_operation(draft_op);
         if (idx < 0) { status(_L("Could not add the operation (no setup?)."), true); return false; }
-        stale.insert(stale.begin() + std::min<size_t>(idx, stale.size()), 1);
     }
     ops_resized();
     sel_op = idx; sel_setup = -1;
     edit_op = idx;   // a failed calculation leaves the page open on the stored operation
     regenerate({idx}, _L("Calculating ") + wxString::FromUTF8(draft_op.name) + _L("…"));
+    if (doc.is_stale(idx)) {   // cancelled: the operation is stored, its toolpath is not
+        status(wxString::FromUTF8(draft_op.name) + _L(": calculation cancelled. ✓ calculates it again."), true);
+        return false;
+    }
     const Toolpath& tp = doc.paths[idx];
     if (!tp.ok()) {
         status(wxString::FromUTF8(draft_op.name) + ": " + wxString::FromUTF8(tp.error), true);
@@ -1688,13 +1685,24 @@ bool CamController::Impl::regenerate(const std::vector<int>& ops, const wxString
     if (!ensure_model()) return false;
     try { update_setup_frames(model, doc); } catch (...) {}
     ops_resized();
+
+    // Generation runs on a worker thread; the kernel's progress callback only stores the fraction
+    // and reads the cancel flag (atomics), and this thread shows them. The document is read-only
+    // meanwhile: input is disabled and the results are stored after the worker has joined.
     std::vector<std::pair<int, Toolpath>> results;
-    run_off_ui_thread(&p, what, [&]() {
-        for (int i : ops) {
+    std::atomic<double> fraction{0};
+    std::atomic<bool>   cancel{false}, done{false};
+    std::thread worker([&] {
+        for (size_t k = 0; k < ops.size() && !cancel; ++k) {
+            const int i = ops[k];
             if (i < 0 || i >= int(doc.operations.size())) continue;
+            const CAM::ProgressFn progress = [&, k](double f) {
+                fraction = (double(k) + f) / double(ops.size());
+                return cancel.load();
+            };
             Toolpath tp;
             try {
-                tp = generate_toolpath(doc, i, model);
+                tp = generate_toolpath(doc, i, model, progress);
             } catch (const Standard_Failure& e) {
                 tp.error = std::string("Geometry kernel failure: ") + (e.GetMessageString() ? e.GetMessageString() : "OCCT");
             } catch (const std::exception& e) {
@@ -1702,15 +1710,59 @@ bool CamController::Impl::regenerate(const std::vector<int>& ops, const wxString
             }
             results.emplace_back(i, std::move(tp));
         }
+        done = true;
     });
+    {
+        wxWindowDisabler disabler;
+        std::unique_ptr<wxProgressDialog> dlg;
+        int elapsed_ms = 0;
+        while (!done) {
+            // Only a slow calculation gets a dialog, so a quick one does not flash.
+            if (dlg == nullptr && elapsed_ms >= 300)
+                dlg = std::make_unique<wxProgressDialog>(_L("CAM"), what, 1000, &p,
+                                                         wxPD_CAN_ABORT | wxPD_ELAPSED_TIME | wxPD_AUTO_HIDE | wxPD_SMOOTH);
+            if (dlg != nullptr) {
+                if (!dlg->Update(std::clamp(int(fraction * 1000), 0, 999))) cancel = true;
+            } else {
+                wxYield();
+            }
+            wxMilliSleep(30);
+            elapsed_ms += 30;
+        }
+    }
+    worker.join();
+
     bool all_ok = true;
+    std::vector<int> repick;
     for (auto& [i, tp] : results) {
+        if (cancel && tp.error == "Cancelled") { doc.invalidate(i); all_ok = false; continue; }   // keeps the old path, marked stale
+        const Toolpath& old = doc.paths[i];
+        // Picked face / edge ids name the topology they were picked on. An operation that worked on
+        // an older model and fails now most likely points at faces that have moved on.
+        const GeometrySelection& g = doc.operations[i].geom;
+        if (!tp.ok() && old.generation != 0 && old.generation != doc.model_generation && old.ok()
+            && (!g.faces.empty() || !g.edges.empty()))
+            repick.push_back(i);
         all_ok = all_ok && tp.ok();
         doc.paths[i] = std::move(tp);
-        stale[i]     = 0;
     }
     gl_dirty = true;
     after_ops_changed();
+    if (cancel) status(_L("Cancelled: the operations that were not finished still need regenerating."), true);
+    if (!repick.empty() && page == Page::None) {
+        const int i = repick.front();
+        const std::string err = doc.paths[i].error;
+        sel_op = i; sel_setup = -1;
+        rebuild_tree();
+        open_op(i, OpType::Face);
+        draft_op.geom.faces.clear();
+        draft_op.geom.edges.clear();
+        refresh_geom_list();
+        pm->expand(o_geom_group);
+        apply_op_rows();
+        status(_L("Re-pick the faces for this operation: the model changed, so the faces picked before are not the same "
+                  "faces any more (") + wxString::FromUTF8(err) + ")", true);
+    }
     return all_ok;
 }
 
@@ -1727,7 +1779,6 @@ void CamController::Impl::delete_op(int i)
 {
     if (i < 0 || i >= int(doc.operations.size())) return;
     doc.remove_operation(i);
-    if (i < int(stale.size())) stale.erase(stale.begin() + i);
     sel_op = -1;
     after_ops_changed();
 }
@@ -1736,7 +1787,6 @@ void CamController::Impl::duplicate_op(int i)
 {
     const int n = doc.duplicate_operation(i);
     if (n < 0) return;
-    stale.insert(stale.begin() + std::min<size_t>(n, stale.size()), i < int(stale.size()) ? stale[i] : 1);
     ops_resized();
     doc.operations[n].name = next_op_name(doc.operations[n].type);
     sel_op = n;
@@ -1747,11 +1797,6 @@ void CamController::Impl::move_op(int i, int delta)
 {
     const int n = doc.move_operation(i, i + delta);
     if (n < 0) return;
-    if (i < int(stale.size()) && n < int(stale.size())) {
-        const char s = stale[i];
-        stale.erase(stale.begin() + i);
-        stale.insert(stale.begin() + n, s);
-    }
     sel_op = n;
     after_ops_changed();
 }
@@ -1769,12 +1814,7 @@ void CamController::Impl::delete_setup(int s)
     wxMessageDialog dlg(&p, wxString::Format(_L("Delete %s and its operations?"), wxString::FromUTF8(doc.setups[s].name)),
                         _L("Delete Setup"), wxYES_NO | wxICON_QUESTION);
     if (dlg.ShowModal() != wxID_YES) return;
-    // Mirror the kernel's removal of this setup's operations in the stale flags.
-    std::vector<char> keep;
-    for (int i = 0; i < int(doc.operations.size()); ++i)
-        if (doc.operations[i].setup_index != s) keep.push_back(i < int(stale.size()) ? stale[i] : 1);
     doc.remove_setup(s);
-    stale = keep;
     sel_setup = sel_op = -1;
     try { update_setup_frames(model, doc); } catch (...) {}
     stock_dirty = true;
@@ -2536,6 +2576,7 @@ void CamController::Impl::sim_open()
     sim_t     = 0;
     sim_on    = true;
     sim_cut_upto = 0;
+    sim_snapshots.clear();
     sim_mesh = TriangleMesh();
     sim_mesh_dirty = true;
     sim_stock_ok = false;
@@ -2569,6 +2610,7 @@ void CamController::Impl::sim_close()
     p.Layout();
     if (bodies_hidden && p.m_viewport) { p.m_viewport->set_body_hidden(false); bodies_hidden = false; }
     sim_mesh = TriangleMesh();
+    sim_snapshots.clear();
     sim_mesh_dirty = true;
     stock_dirty    = true;
     repaint();
@@ -2609,15 +2651,24 @@ void CamController::Impl::sim_update_stock(bool)
     if (!sim_stock_ok || sim.empty()) return;
     const size_t upto = std::min<size_t>(sim_index(sim_t), sim.size());
     try {
-        if (upto < sim_cut_upto) {   // scrubbed back: start from fresh stock
-            const CamSetupFrame& f = model.setups.at(sim_setup);
-            if (doc.setups[sim_setup].stock.kind == StockKind::Cylinder && f.stock_radius > 0)
-                stocksim.init_cylinder(f.stock.min.x(), f.stock.max.x(), f.stock_radius);
-            else
-                stocksim.init_box(f.stock);
-            sim_cut_upto = 0;
+        if (upto < sim_cut_upto) {   // scrubbed back: restart from the nearest snapshot at or before it
+            auto it = sim_snapshots.upper_bound(upto);
+            if (it == sim_snapshots.begin()) {
+                const CamSetupFrame& f = model.setups.at(sim_setup);
+                if (doc.setups[sim_setup].stock.kind == StockKind::Cylinder && f.stock_radius > 0)
+                    stocksim.init_cylinder(f.stock.min.x(), f.stock.max.x(), f.stock_radius);
+                else
+                    stocksim.init_box(f.stock);
+                sim_cut_upto = 0;
+            } else {
+                --it;
+                stocksim     = it->second;
+                sim_cut_upto = it->first;
+            }
         }
+        const size_t step = std::max<size_t>(1, sim.size() / 20);
         for (size_t k = sim_cut_upto; k < upto; ++k) {
+            if (k > 0 && k % step == 0 && sim_snapshots.count(k) == 0) sim_snapshots.emplace(k, stocksim);
             const SimMove& s = sim[k];
             if (s.m.kind == Move::Kind::Rapid) continue;
             const CamTool* t = tool_of(doc.operations[s.op]);
@@ -2746,7 +2797,7 @@ void CamController::on_cad_changed()
 {
     if (m->p.m_doc.topo_generation == m->model_gen && !m->model_dirty) return;
     m->model_dirty = true;
-    m->mark_stale_all();
+    m->doc.mark_model_changed();   // every toolpath is now stale (the tree says "regenerate")
     m->gl_dirty = m->stock_dirty = true;
     if (m->p.m_cam_shown) {
         m->ensure_model();
@@ -2778,7 +2829,9 @@ void CamController::on_solid_pick(int level, int body, int face, int edge)
             }
         } catch (...) {}
         if (!ok) { I.status(_L("Click a face or a round edge for the WCS origin.")); return; }
-        // ponytail: custom point stored as picked (world); an A-indexed setup would need it in the rotated part frame.
+        // Stored in the part frame (world rotated by the setup's A index), as WcsOrigin wants it.
+        I.read_setup_page(I.draft_setup);
+        try { pt = world_to_part_frame(I.draft_setup, I.model, pt); } catch (...) {}
         for (int i = 0; i < 3; ++i) I.s_wcs_xyz[i]->SetValue(pt[i]);
         I.s_wcs_custom->SetValue(true);
         I.s_wcs_pick->SetValue(false);
@@ -2842,7 +2895,6 @@ void CamController::load_recipe(const std::string& blob)
         I.status(_L("Could not read the CAM setups of this project."), true);
         return;
     }
-    I.stale.assign(I.doc.operations.size(), 1);
     I.ops_resized();
     I.model_dirty = true;
     I.stock_dirty = true;
@@ -2857,7 +2909,6 @@ void CamController::clear()
     I.sim_close();
     I.close_page();
     I.doc.clear();
-    I.stale.clear();
     I.sel_op = I.sel_setup = -1;
     I.ops_resized();
     I.model_dirty = I.stock_dirty = true;
@@ -2921,6 +2972,12 @@ json CamController::mcp(const std::string& method, const json& params)
         I.p.m_viewport->set_view(v);
         return json{{"ok", true}};
     }
+    if (method == "cam_project_save") {   // the whole project as a 3MF (the CAM recipe rides in it)
+        Plater* pl = wxGetApp().plater();
+        const int rc = pl ? pl->export_3mf(boost::filesystem::path(params.value("path", std::string()))) : -1;
+        return json{{"ok", rc >= 0}, {"rc", rc}};
+    }
+    if (method == "cam_edit_op") { I.open_op(params.value("op", 0), OpType::Face); return json{{"ok", I.page == Impl::Page::Op}}; }
     if (method == "cam_edit_setup") { I.open_setup(params.value("setup", 0)); return json{{"ok", true}}; }
     if (method == "cam_add_op") {
         const OpInfo* info = op_info_by_id(params.value("type", std::string("adaptive")));
@@ -2944,6 +3001,13 @@ json CamController::mcp(const std::string& method, const json& params)
         if (params.contains("whole_model")) { I.o_whole->SetValue(params["whole_model"].get<bool>()); I.o_holes_auto->SetValue(params["whole_model"].get<bool>()); }
         if (params.contains("stepdown")) I.o_stepdown->SetValue(params["stepdown"].get<double>());
         if (params.contains("stepover")) I.o_stepover->SetValue(params["stepover"].get<double>());
+        if (params.contains("lead_in_radius")) I.o_lead_r->SetValue(params["lead_in_radius"].get<double>());
+        if (params.contains("side")) {
+            const std::string sd = params["side"].get<std::string>();
+            I.o_side->SetSelection(sd == "inside" ? 1 : sd == "on" ? 2 : 0);
+        }
+        if (params.contains("hole_min")) I.o_hole_min->SetValue(params["hole_min"].get<double>());
+        if (params.contains("hole_max")) I.o_hole_max->SetValue(params["hole_max"].get<double>());
         I.refresh_geom_list();
         I.apply_op_rows();
         if (params.value("confirm", false)) {

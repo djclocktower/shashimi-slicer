@@ -50,8 +50,11 @@ and calls `put_other_changes()` so the project reads as modified. `on_tab_shown(
 when the CAM document is empty, and `clear_document()` (New/Open Project) clears it.
 
 `CamDocument::paths` (the generated toolpaths) is a cache and is never saved: a loaded project shows
-every operation as needing regeneration. `Impl::stale` is a GUI-side flag per operation, kept parallel
-to `operations` by every add, remove, move and duplicate the front end performs.
+every operation as needing regeneration. Staleness is the kernel's: `generate_toolpath()` stamps each
+path with `CamDocument::model_generation`, and `is_stale(op)` compares the two. The front end bumps the
+generation (`mark_model_changed()`) when the CAD document changes and calls `invalidate(op)` for the
+operations of an edited setup or a cancelled calculation. The tree state is: stale if `is_stale`, else
+error if the path has an error, else ok.
 
 ### The CAM model and staleness
 
@@ -60,7 +63,7 @@ The generators read a `CamModel`, not the CAD document. `Impl::ensure_model()` b
 `add_cam_sketch()`, and fills the setup frames with `update_setup_frames()`. It is rebuilt when
 `CadDocument::topo_generation` changes. `DesignPanel::sync_recipe_to_model()` is the one place every
 CAD change passes through (recompute, tree edits, MCP), so it calls `CamController::on_cad_changed()`,
-which marks the model dirty and every operation stale (the tree shows "⚠ regenerate"). Picked face and
+which marks the model dirty and calls `mark_model_changed()` (the tree shows "⚠ regenerate"). Picked face and
 edge ids are only valid for the topology they were picked on, which is why a CAD change makes
 toolpaths stale instead of silently regenerating them.
 
@@ -137,7 +140,7 @@ and the Message box repeats the status line (errors in red).
 |---|---|
 | Machine and Material | Machine (`load_machines(resources_dir())`), Material (13 materials) |
 | Stock | Shape: Box around the model (six side offsets), Cylinder along X (radius, length, 0 = from the model; extra radius), Custom box (min/max) |
-| Work Coordinate System | Origin on stock/model box; the nine box points as a 3×3 grid of radio buttons seen from above, plus Top/Bottom; or Custom point with X/Y/Z and a Pick toggle (a face centroid or a round edge's centre); work offset G54–G59 |
+| Work Coordinate System | Origin on stock/model box; the nine box points as a 3×3 grid of radio buttons seen from above, plus Top/Bottom; or Custom point with X/Y/Z and a Pick toggle (a face centroid or a round edge's centre, converted with `world_to_part_frame()` so an A-indexed setup gets it in its part frame); work offset G54–G59 |
 | Model | All bodies, or a checklist of bodies |
 | 4th Axis | A index angle, shown only for a machine with an A axis |
 
@@ -150,21 +153,36 @@ One page for every `OpType`; the rows shown depend on the type.
 | Group | Controls |
 |---|---|
 | Tool | Tool (the document's tools, then the library's; "T3  6 mm flat end mill"), Library…; Feeds & speeds from the material (auto) with RPM / cutting / plunge / ramp feed, editable when auto is off; a line with the material, chip load and flutes. Auto values come from `effective_feeds()` and follow tool changes. For a new operation, choosing a tool rescales the operation's defaults with `default_operation(type, tool)` |
-| Geometry | What to pick for this type; Pick in viewport (on by default) and Clear; the list of picked faces, edges, sketch and points (Delete removes the highlighted one); Whole model (3D, rotary finish); Holes: auto-detect with a diameter range (Drill, Bore) |
+| Geometry | What to pick for this type; Pick in viewport (on by default) and Clear; the list of picked faces, edges, sketch and points (Delete removes the highlighted one); Whole model (3D, rotary finish); Holes: auto-detect, and a hole diameter range (Drill, Bore: `hole_diameter_min/max`, 0 = any) |
 | Heights | Clearance, Retract, Top, Bottom: each a reference (stock/model/selection top/bottom, absolute) plus an offset |
-| Passes | stepover, stepdown, stock to leave (walls, floors), climb, side, finishing passes and stepover, drill cycle / peck / dwell / break-through, chamfer width and tip offset, pass direction and boundary (parallel), wrapped operation and wrap radius, A stepover and spiral (rotary), tolerance |
+| Passes | stepover, stepdown, stock to leave (walls, floors), climb, side, finishing passes and stepover, drill cycle / peck / dwell / break-through, chamfer width and tip offset, pass direction and boundary (parallel), wrapped operation and wrap radius, A stepover and spiral (rotary), both directions / zig-zag (3D Parallel, Rotary Finish: `bidirectional`), tolerance |
 | Linking | entry (helix, ramp, plunge), ramp angle, helix diameter, lead-in radius |
 | Advanced (collapsed) | rest machining, ordering, optimal load, lift height, minimum stepdown, helix angle |
 
 While Pick is on, a face click adds the face and an edge click adds the edge; clicking the same one
 again removes it (the viewport's re-pick escalation to a whole body is switched off meanwhile). A click
-on a committed sketch sets or clears the sketch. The drill diameter filter is resolved on ✓: the holes
-`holes_for_op()` finds in range become the selection's faces.
+on a committed sketch sets or clears the sketch.
 
 ✓ copies the chosen tool into the document if it is not there, stores the operation (a new one goes in
-with `add_operation`) and generates its toolpath with `generate_toolpath()` on a worker thread. An error
-keeps the page open with the kernel's sentence in red ("Tool 6 mm cannot enter this 5 mm slot"); success
-closes it and reports the time and cutting length, plus the first warning.
+with `add_operation`) and generates its toolpath. An error keeps the page open with the kernel's
+sentence in red ("Tool 6 mm cannot enter this 5 mm slot"); a cancelled calculation keeps it open too,
+with the operation stored and stale; success closes it and reports the time and cutting length, plus the
+first warning (3D operations include the kernel's gouge check).
+
+### Calculating
+
+`regenerate()` is the one path for ✓, Regenerate, Simulate and Post. `generate_toolpath()` runs on a
+worker thread, one operation after the other. Its `ProgressFn` only stores the fraction and reads the
+cancel flag, both atomics, so it touches no widget from the worker. The UI thread keeps input disabled
+(`wxWindowDisabler`) and, once the work has taken 300 ms, shows a `wxProgressDialog` with Cancel whose
+bar is the overall fraction. Cancel sets the flag; the kernel returns "Cancelled", and that operation
+keeps its previous path, marked stale. Results are stored in the document only after the worker has
+joined.
+
+When an operation that had a valid path fails after the model changed, and it names picked faces or
+edges, their ids most likely point at different faces now. The first such operation is selected and
+opened with its picks cleared, Pick on and the Geometry group open, and the message "Re-pick the faces
+for this operation" followed by the kernel's error.
 
 ### Beginner defaults
 
@@ -211,7 +229,9 @@ feed (rapids at the machine's rapid feed). The bar over the viewport has Play/Pa
 speed (1× to 100× real time), a scrub slider, the time, and the current move (operation, tool, feed or
 "rapid", X Y Z and A on a 4-axis machine). A 33 ms timer advances the time; about ten times a second
 the moves up to the current one are cut into a `StockSim` (box, or cylinder for cylinder stock) and
-its `to_mesh()` replaces the stock drawing. Scrubbing backwards restarts the stock from fresh. When
+its `to_mesh()` replaces the stock drawing. While cutting forward, a copy of the `StockSim` is kept
+every 5 % of the moves; scrubbing backwards restarts from the nearest copy before the new position
+(from fresh stock before the first). The copies go when the simulation closes. When
 the stock mesh is shown the CAD bodies are hidden (the stock is the part now); closing the simulation
 shows them again. If the stock simulation fails the tool still animates over the paths.
 
@@ -227,9 +247,10 @@ lines and estimated time, which the status line repeats.
 ## Scripted control
 
 `McpControl` forwards every `cam_*` method to `CamController::mcp()`, which drives the same handlers
-the ribbon and the tree do: `cam_tab`, `cam_describe`, `cam_new_setup`, `cam_edit_setup`,
+the ribbon and the tree do: `cam_tab` (tab: cam, modeling, sketch), `cam_view`, `cam_describe`,
+`cam_new_setup` (machine, material, stock), `cam_edit_setup`, `cam_edit_op`,
 `cam_add_op` (type, tool or tool_diameter, faces, edges, sketch, whole_model, stepover, stepdown,
-confirm), `cam_pm_ok`, `cam_pm_cancel`, `cam_select`, `cam_regenerate`, `cam_simulate` (t, play,
+lead_in_radius, side, hole_min, hole_max, confirm), `cam_project_save` (path: the project as a 3MF), `cam_pm_ok`, `cam_pm_cancel`, `cam_select`, `cam_regenerate`, `cam_simulate` (t, play,
 close), `cam_post` (dialect, path, scope; opens the dialog after the reply), `cam_tool_library`.
 
 ## Constraints
