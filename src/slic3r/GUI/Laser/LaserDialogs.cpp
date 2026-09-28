@@ -430,21 +430,21 @@ bool ask_circular_array(wxWindow* parent, CircularArrayParams& p)
 
 bool ask_trace(wxWindow* parent, const LaserShape& image, TraceOptions& opts)
 {
-    const LaserShape small = downscaled(image, 320);
+    const LaserShape thumb = downscaled(image, 320);
     TraceOptions     o     = opts;
     wxDialog         dlg(parent, wxID_ANY, _L("Trace Image"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
     auto*            top  = new wxBoxSizer(wxHORIZONTAL);
-    const double     fit  = 360. / std::max(small.image_w, small.image_h);
-    const wxSize     psz(int(small.image_w * fit) + 2, int(small.image_h * fit) + 2);
+    const double     fit  = 360. / std::max(thumb.image_w, thumb.image_h);
+    const wxSize     psz(int(thumb.image_w * fit) + 2, int(thumb.image_h * fit) + 2);
     auto*            view = new wxPanel(&dlg, wxID_ANY, wxDefaultPosition, psz);
     view->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    std::vector<uint8_t> adj = small.gray;
-    apply_adjustments(adj, small.image_w, small.image_h, small.brightness, small.contrast, small.gamma, small.invert);
-    const wxBitmap bmp = wxBitmap(gray_bitmap(adj, small.image_w, small.image_h, false).ConvertToImage().Scale(psz.x - 2, psz.y - 2));
+    std::vector<uint8_t> adj = thumb.gray;
+    apply_adjustments(adj, thumb.image_w, thumb.image_h, thumb.brightness, thumb.contrast, thumb.gamma, thumb.invert);
+    const wxBitmap bmp = wxBitmap(gray_bitmap(adj, thumb.image_w, thumb.image_h, false).ConvertToImage().Scale(psz.x - 2, psz.y - 2));
     LaserShape     traced;
     wxStaticText*  info = nullptr;
     auto           retrace = [&] {
-        traced = trace_image(small, o);
+        traced = trace_image(thumb, o);
         size_t n = 0;
         for (const LaserPath& p : traced.paths) n += p.pts.points.size();
         if (info) info->SetLabel(wxString::Format(_L("%zu outlines, %zu points"), traced.paths.size(), n));
@@ -457,11 +457,11 @@ bool ask_trace(wxWindow* parent, const LaserShape& image, TraceOptions& opts)
         dc.DrawBitmap(bmp, 1, 1);
         dc.SetPen(wxPen(wxColour(230, 40, 40), 1));
         // Local mm (centred, Y up) -> panel px.
-        const double sx = (psz.x - 2) / small.width_mm, sy = (psz.y - 2) / small.height_mm;
+        const double sx = (psz.x - 2) / thumb.width_mm, sy = (psz.y - 2) / thumb.height_mm;
         for (const LaserPath& p : traced.paths) {
             std::vector<wxPoint> pts;
             for (const Point& q : p.pts.points)
-                pts.emplace_back(int(1 + (unscale<double>(q.x()) + small.width_mm / 2) * sx), int(1 + (small.height_mm / 2 - unscale<double>(q.y())) * sy));
+                pts.emplace_back(int(1 + (unscale<double>(q.x()) + thumb.width_mm / 2) * sx), int(1 + (thumb.height_mm / 2 - unscale<double>(q.y())) * sy));
             if (p.closed && !pts.empty()) pts.push_back(pts.front());
             if (pts.size() > 1) dc.DrawLines(int(pts.size()), pts.data());
         }

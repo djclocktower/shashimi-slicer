@@ -1238,7 +1238,7 @@ DesignPanel::DesignPanel(wxWindow* parent)
             f->Add(new wxStaticText(m_cards, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
             f->Add(ctl, 0, expand ? int(wxEXPAND) : int(wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL));
         };
-        auto boxed = [pad](wxSizer* form) {
+        auto boxed = [](wxSizer* form) {
             auto* b = new wxBoxSizer(wxVERTICAL);
             b->Add(form, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad);
             return b;

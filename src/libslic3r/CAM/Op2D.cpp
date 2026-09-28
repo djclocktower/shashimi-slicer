@@ -73,10 +73,10 @@ bool segment_inside(const ExPolygons& area, const Point& a, const Point& b)
     return len >= (b - a).cast<double>().norm() - scale_(0.01);
 }
 
-// Rotates a closed loop so it starts at the point of the loop nearest to `near` (inserted when it
-// falls inside a segment), or, without `near`, at the middle of its longest segment: a lead arc
+// Rotates a closed loop so it starts at the point of the loop nearest to `anchor` (inserted when it
+// falls inside a segment), or, without `anchor`, at the middle of its longest segment: a lead arc
 // fits there, it would not at a corner.
-Points start_loop_at(const Points& pts, const Point* near)
+Points start_loop_at(const Points& pts, const Point* anchor)
 {
     const size_t n = pts.size();
     size_t       seg = 0;
@@ -88,11 +88,11 @@ Points start_loop_at(const Points& pts, const Point* near)
         const Point& b = pts[(i + 1) % n];
         Point        q;
         double       score;
-        if (near) {
+        if (anchor) {
             const Vec2d ab = (b - a).cast<double>();
-            const double t = ab.squaredNorm() > 0 ? std::clamp((*near - a).cast<double>().dot(ab) / ab.squaredNorm(), 0., 1.) : 0.;
+            const double t = ab.squaredNorm() > 0 ? std::clamp((*anchor - a).cast<double>().dot(ab) / ab.squaredNorm(), 0., 1.) : 0.;
             q     = a + (ab * t).cast<coord_t>();
-            score = -(q - *near).cast<double>().squaredNorm();
+            score = -(q - *anchor).cast<double>().squaredNorm();
         } else {
             q     = a + ((b - a) / 2);
             score = (b - a).cast<double>().squaredNorm();
@@ -792,23 +792,23 @@ static CamSetupFrame frame_of(const CamDocument& doc, const CamModel& model, int
 static Polylines join_chains(Polylines in)
 {
     const double tol2 = scale_(0.01) * scale_(0.01);
-    auto near = [&](const Point& a, const Point& b) { return (a - b).cast<double>().squaredNorm() <= tol2; };
+    auto coincident = [&](const Point& a, const Point& b) { return (a - b).cast<double>().squaredNorm() <= tol2; };
     Polylines out;
     while (!in.empty()) {
         Polyline cur_pl = std::move(in.back());
         in.pop_back();
-        for (bool grew = true; grew && !near(cur_pl.first_point(), cur_pl.last_point());) {
+        for (bool grew = true; grew && !coincident(cur_pl.first_point(), cur_pl.last_point());) {
             grew = false;
             for (size_t i = 0; i < in.size(); ++i) {
                 Polyline& o = in[i];
-                if (near(cur_pl.last_point(), o.last_point()))
+                if (coincident(cur_pl.last_point(), o.last_point()))
                     o.reverse();
-                if (near(cur_pl.last_point(), o.first_point())) {
+                if (coincident(cur_pl.last_point(), o.first_point())) {
                     cur_pl.points.insert(cur_pl.points.end(), o.points.begin() + 1, o.points.end());
                 } else {
-                    if (near(cur_pl.first_point(), o.first_point()))
+                    if (coincident(cur_pl.first_point(), o.first_point()))
                         o.reverse();
-                    if (!near(cur_pl.first_point(), o.last_point()))
+                    if (!coincident(cur_pl.first_point(), o.last_point()))
                         continue;
                     o.points.insert(o.points.end(), cur_pl.points.begin() + 1, cur_pl.points.end());
                     cur_pl = std::move(o);
@@ -818,7 +818,7 @@ static Polylines join_chains(Polylines in)
                 break;
             }
         }
-        if (cur_pl.points.size() > 2 && near(cur_pl.first_point(), cur_pl.last_point()))
+        if (cur_pl.points.size() > 2 && coincident(cur_pl.first_point(), cur_pl.last_point()))
             cur_pl.points.back() = cur_pl.points.front();
         out.push_back(std::move(cur_pl));
     }
