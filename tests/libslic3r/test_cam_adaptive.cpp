@@ -297,10 +297,10 @@ TEST_CASE("Adaptive rest machining only cuts what the previous tool left", "[Cam
     REQUIRE(first.ok);
     REQUIRE_FALSE(first.cleared.empty());
 
-    A::Params small;
-    small.tool_diameter = 4;
-    A::Result rest      = A::clear(pocket, {}, small, first.cleared);
-    A::Result full      = A::clear(pocket, {}, small);
+    A::Params small_tool;
+    small_tool.tool_diameter = 4;
+    A::Result rest      = A::clear(pocket, {}, small_tool, first.cleared);
+    A::Result full      = A::clear(pocket, {}, small_tool);
     REQUIRE(rest.ok);
     REQUIRE(full.ok);
     const auto cut_length = [](const A::Result& res) {

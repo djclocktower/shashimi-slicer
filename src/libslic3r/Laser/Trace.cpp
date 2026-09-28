@@ -42,19 +42,19 @@ LaserShape trace_image(const LaserShape& image, const TraceOptions& opts)
                 p.points.emplace_back(scale_(-image.width_mm / 2 + (q.x + 0.5) * sx), scale_(image.height_mm / 2 - (q.y + 0.5) * sy));
             return p;
         };
-        auto small = [&](int i) {
+        auto is_small = [&](int i) {
             const cv::Rect bb = cv::boundingRect(contours[i]);
             return std::max(bb.width, bb.height) < opts.ignore_less_than_px;
         };
 
         ExPolygons ex;
         for (int i = 0; i < int(contours.size()); ++i) {
-            if (hier[i][3] != -1 || small(i)) continue;   // RETR_CCOMP: top level = outer boundaries
+            if (hier[i][3] != -1 || is_small(i)) continue;   // RETR_CCOMP: top level = outer boundaries
             ExPolygon e;
             e.contour = to_polygon(i);
             e.contour.make_counter_clockwise();
             for (int h = hier[i][2]; h >= 0; h = hier[h][0])
-                if (!small(h)) {
+                if (!is_small(h)) {
                     e.holes.push_back(to_polygon(h));
                     e.holes.back().make_clockwise();
                 }

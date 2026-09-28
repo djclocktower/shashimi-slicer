@@ -168,7 +168,7 @@ Raster prepare_image(const LaserShape& image, const LaserLayer& layer, const Pro
         const double a = layer.angle_deg * M_PI / 180.;
         const Vec2d  d(std::cos(a), std::sin(a)), n(std::sin(a), -std::cos(a));
         double u0 = 1e300, u1 = -1e300, v0 = 1e300, v1 = -1e300;
-        for (const Vec2d c : {Vec2d(-W / 2, -H / 2), Vec2d(W / 2, -H / 2), Vec2d(W / 2, H / 2), Vec2d(-W / 2, H / 2)}) {
+        for (const Vec2d& c : {Vec2d(-W / 2, -H / 2), Vec2d(W / 2, -H / 2), Vec2d(W / 2, H / 2), Vec2d(-W / 2, H / 2)}) {
             const Vec2d p = image.xform * c;
             u0 = std::min(u0, p.dot(d)); u1 = std::max(u1, p.dot(d));
             v0 = std::min(v0, p.dot(n)); v1 = std::max(v1, p.dot(n));

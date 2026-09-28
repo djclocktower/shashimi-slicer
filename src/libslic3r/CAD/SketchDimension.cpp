@@ -588,15 +588,15 @@ SketchDimLayout layout_sketch_dimension(const std::vector<SketchEntity>& ents,
         const double dl  = v.norm();
         const Vec2d  dir = dl > kEps ? Vec2d(v / dl) : Vec2d(1.0, 0.0);
         const Vec2d  R2  = c + dir * r;
-        const Vec2d  far = dl > r ? T : R2;                 // the leader runs on to the text
+        const Vec2d  lead_end = dl > r ? T : R2;            // the leader runs on to the text
         L.text = T;
         if (d.kind == K::Diameter) {
             const Vec2d R1 = c - dir * r;
-            L.dim_lines.emplace_back(R1, far);
+            L.dim_lines.emplace_back(R1, lead_end);
             add_arrow(L, R1, dir, st);                      // heads on the rim, pointing out
             add_arrow(L, R2, -dir, st);
         } else {
-            L.dim_lines.emplace_back(c, far);
+            L.dim_lines.emplace_back(c, lead_end);
             add_arrow(L, R2, -dir, st);                     // head on the arc, from the centre
         }
         // An arc dimensioned outside its sweep gets the arc continued to the arrow.
