@@ -574,6 +574,34 @@ if (SLIC3R_CAD)
         )
 endif ()
 
+# Laser kernel (Slic3r::Laser): LightBurn-style vector/raster laser jobs and G-code. Headless and
+# OCCT-free, but it ships with the CAD workspace, so it shares the SLIC3R_CAD switch.
+if (SLIC3R_CAD)
+    list(APPEND lisbslic3r_sources
+            Laser/LaserTypes.hpp
+            Laser/LaserDocument.cpp
+            Laser/LaserDocument.hpp
+            Laser/VectorOps.cpp
+            Laser/VectorOps.hpp
+            Laser/ImageEngrave.cpp
+            Laser/ImageEngrave.hpp
+            Laser/Trace.cpp
+            Laser/Trace.hpp
+            Laser/LaserPlan.cpp
+            Laser/LaserPlan.hpp
+            Laser/LaserGCode.cpp
+            Laser/LaserGCode.hpp
+            Laser/Import.cpp
+            Laser/Import.hpp
+            Laser/Materials.cpp
+            Laser/Materials.hpp
+            Laser/TextLayout.cpp
+            Laser/TextLayout.hpp
+            Laser/Laser.cpp
+            Laser/Laser.hpp
+        )
+endif ()
+
 if (APPLE)
     list(APPEND lisbslic3r_sources
             MacUtils.mm

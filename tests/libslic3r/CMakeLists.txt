@@ -69,7 +69,8 @@ if (SLIC3R_CAD)
         test_cam_document.cpp
         test_cam_2d.cpp
         test_cam_drill.cpp
-        test_cam_post.cpp)
+        test_cam_post.cpp
+        test_laser_image.cpp)
 endif ()
 
 if (TARGET OpenVDB::openvdb)

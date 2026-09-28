@@ -788,6 +788,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/RaycastManager.hpp
     Utils/Repetier.cpp
     Utils/Repetier.hpp
+    Utils/GrblStreamer.cpp
+    Utils/GrblStreamer.hpp
     Utils/Serial.cpp
     Utils/Serial.hpp
     Utils/SerialMessage.hpp
