@@ -49,6 +49,8 @@
 #define TAB_ID_MODELING      "modeling"
 #define TAB_ID_CAM           "cam"
 #define TAB_ID_DESIGN        "design"
+// The Laser tab (LightBurn-style laser workspace), after CAM.
+#define TAB_ID_LASER         "laser"
 #endif
 #define TAB_ID_PREPARE       "prepare"
 #define TAB_ID_PREVIEW       "preview"
@@ -79,6 +81,7 @@ class Plater;
 class DesignPanel;
 class CadTabPage;
 class CadWorkspace;
+class LaserPanel;
 #endif
 class MainFrame;
 class WebViewPanel;
@@ -467,6 +470,8 @@ public:
     CadTabPage* m_sketch_tab { nullptr };
     CadTabPage* m_modeling_tab { nullptr };
     CadTabPage* m_cam_tab { nullptr };
+    // Built the first time the Laser tab is shown (never prebuilt).
+    LazyPage<LaserPanel>* m_laser_page { nullptr };
 #endif
     //BBS: GUI refactor
     LazyPage<MonitorPanel>* m_monitor_page{ nullptr };

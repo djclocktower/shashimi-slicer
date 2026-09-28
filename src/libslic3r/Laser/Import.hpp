@@ -24,10 +24,13 @@ struct ImportResult {
     bool ok() const { return error.empty(); }
 };
 
-// Groups kept; filled shapes -> closed paths, stroked-only -> open; Beziers flattened to 0.02 mm.
+// Filled shapes -> closed paths, stroked-only paths keep the SVG closed flag; Beziers flattened to
+// 0.02 mm; units via NanoSVG (px at 96 dpi, mm, in ...). NanoSVG flattens groups, so a run of
+// shapes sharing an id (a group id inherited by id-less children) comes back as one Group.
 ImportResult import_svg(const std::string& path);
 // LINE, LWPOLYLINE/POLYLINE (bulges), CIRCLE, ARC, ELLIPSE, SPLINE (de Boor), INSERT/BLOCK
-// (recursive, with transforms); $INSUNITS scales to mm (unitless = mm).
+// (recursive, as Groups), TEXT/MTEXT as Text shapes; $INSUNITS scales to mm (unitless = mm).
+// Layer: a DXF layer named "C05"/"5", else the nearest palette colour of ACI 1..9, else ACI % 30.
 ImportResult import_dxf(const std::string& path);
 // One Image shape, grayscale, sized at `dpi` (files rarely carry a trustworthy one).
 ImportResult import_image(const std::string& path, double dpi = 254);

@@ -325,6 +325,7 @@ struct GCodeOptions {
     bool        comments{true};      // header with device, layers and time; per-layer comments
     int         decimals{3};         // X/Y digits
     std::string job_name{"shashimi"};
+    bool        modal_fs{true};      // false: X, Y, F and S on every move (senders that need them)
 };
 
 // Trace Image (LightBurn semantics). Pixels with cutoff <= value <= threshold are traced.

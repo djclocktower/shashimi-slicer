@@ -13,8 +13,11 @@
 
 #include <chrono>
 #include <cstdint>
+#include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -51,6 +54,36 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
+// A fake GRBL 1.1 controller behind ITransport, for the GUI's "Simulator" device and the tests:
+// 128-byte RX buffer (overflow recorded), `ok` per line, `?` status, `!` `~` 0x18, $$ $I $X $H $J=,
+// G0/G1 positions, G10 L20; error:20 for unknown words. Takes `lines_per_read` lines per
+// read_available() call (none while held), so the streamer really has to wait for acks.
+class GrblSimulator : public ITransport {
+public:
+    // Readable from any thread while the simulator runs.
+    struct Shared {
+        std::atomic<int> max_rx_bytes{0};    // largest RX buffer fill seen (GRBL: must stay <= 128)
+        std::atomic<int> fail_on_line{0};    // > 0: answer error:20 to that line (1-based, all lines)
+        std::atomic<int> lines_per_read{8};
+        // > 0: moves take distance / feed / time_scale (15-block planner, like the real thing);
+        // 0: they complete at once.
+        std::atomic<double> time_scale{0};
+        std::mutex               mutex;
+        std::vector<std::string> received;   // every line, in arrival order
+    };
+    explicit GrblSimulator(std::shared_ptr<Shared> shared = std::make_shared<Shared>());
+    ~GrblSimulator() override;
+    bool        open(std::string* error) override;
+    void        close() override;
+    bool        is_open() const override;
+    bool        write(const std::string& bytes) override;
+    std::string read_available(int timeout_ms) override;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+
 enum class GrblState { Disconnected, Unknown, Idle, Run, Hold, Jog, Alarm, Door, Check, Home, Sleep };
 
 struct GrblStatus {
@@ -63,7 +96,8 @@ struct GrblStatus {
     double      spindle{0};          // S
     int         ov_feed{100}, ov_rapid{100}, ov_spindle{100};   // %
     int         planner_free{-1}, rx_free{-1};                    // Bf:, -1 = not reported
-    std::string pins;                // Pn:
+    std::string pins;                // Pn: (cleared when a report has none)
+    std::string accessories;         // A: (S/C spindle, F flood, M mist; cleared when absent)
     int         alarm{0};            // last ALARM:n, 0 = none
 };
 
@@ -144,8 +178,9 @@ public:
 
     // ---- Job control ----------------------------------------------------------------------------
     // Streams the lines (comments/blank stripped); false when not connected or not Idle. Framing is
-    // a job too (Laser::frame_gcode).
-    bool        start(std::vector<std::string> lines);
+    // a job too (Laser::frame_gcode). estimated_s > 0 (LaserJob::estimated_time_s): the ETA is that
+    // estimate scaled by the lines left; otherwise it comes from the ack rate.
+    bool        start(std::vector<std::string> lines, double estimated_s = 0);
     void        pause();     // feed hold
     void        resume();    // cycle start
     void        stop();      // feed hold, soft reset, $X; queue dropped
@@ -155,6 +190,12 @@ public:
     static constexpr size_t kConsoleLines = 2000;
     std::vector<ConsoleLine> console() const;
     void                     clear_console();
+
+    // ---- Controller info ------------------------------------------------------------------------
+    // `$N=value` replies seen so far (send_line("$$") refreshes them), keyed by N.
+    std::map<int, std::string> settings() const;
+    // Banner and `[VER:...]` text of the connected controller.
+    std::string                firmware() const;
 
 private:
     struct Impl;

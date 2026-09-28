@@ -21,6 +21,8 @@ LaserPaths to_paths(const ExPolygons& regions);
 LaserPaths offset_paths(const LaserPaths& paths, double distance_mm, OffsetDir dir, CornerStyle corners);
 // Boolean tool: `a` op `b`, both read as regions (to_expolygons).
 LaserPaths boolean_op(const LaserPaths& a, const LaserPaths& b, BooleanOp op);
+// Weld tool: every shape's closed paths read as a region (to_expolygons), then all regions unioned.
+LaserPaths weld(const std::vector<LaserPaths>& shapes);
 
 // Scan fill. Lines at `angle_deg` from +X, `interval_mm` apart, clipped to the regions; crosshatch
 // adds the set at angle + 90. Ordered for little travel (bidirectional: alternate directions,
@@ -35,8 +37,10 @@ LaserPaths kerf_offset(const LaserPaths& paths, double kerf_mm);
 // Cuts `tab_size_mm` gaps into closed paths: `count` evenly spaced per path, or one every
 // `spacing_mm` when that is > 0. Tabbed paths come back open; open paths unchanged.
 LaserPaths insert_tabs(const LaserPaths& paths, int count, double spacing_mm, double tab_size_mm);
-// Closed paths get a straight approach of `length_mm` from outside the part ending at the path
-// start (they come back open, lead-in first). Open paths unchanged.
+// Closed paths get a straight approach of `length_mm` from outside the part (holes: from inside
+// the hole) at 45 deg, ending mid-way along the path's first edge, where the cut then starts and
+// ends; shortened on edges shorter than 1.41 * length_mm so it stays beside that edge. They come
+// back open, lead-in first. Open paths unchanged.
 LaserPaths add_lead_in(const LaserPaths& paths, double length_mm);
 
 // Reorders `paths` in place for cutting from `start` (mm): inner paths before the paths enclosing

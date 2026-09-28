@@ -1575,6 +1575,9 @@ public:
     // Opaque CAM recipe (CAM::CamDocument::serialize()), round-tripped through the 3MF as
     // Metadata/shashimi_cam.bin. Empty for projects without CAM.
     std::string cam_recipe;
+    // Opaque laser project (Laser::LaserDocument::serialize()), round-tripped through the 3MF as
+    // Metadata/shashimi_laser.bin. Empty for projects without laser work.
+    std::string laser_recipe;
 
     void SetDesigner(std::string designer, std::string designer_user_id) {
         if (design_info == nullptr) {

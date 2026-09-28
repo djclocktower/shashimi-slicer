@@ -180,6 +180,7 @@ const std::string ORCA_CAD_RECIPE_FILE = "Metadata/orca_cad.bin";
 // feature tree of every project written before the move, without a word. Never written.
 const std::string LEGACY_CAD_RECIPE_FILE = "Metadata/SnapOrca_cad.bin";
 const std::string SHASHIMI_CAM_RECIPE_FILE = "Metadata/shashimi_cam.bin";
+const std::string SHASHIMI_LASER_RECIPE_FILE = "Metadata/shashimi_laser.bin";
 const std::string LAYER_CONFIG_RANGES_FILE = "Metadata/layer_config_ranges.xml";
 const std::string BRIM_EAR_POINTS_FILE = "Metadata/brim_ear_points.txt";
 /*const std::string SLA_SUPPORT_POINTS_FILE = "Metadata/Slic3r_PE_sla_support_points.txt";
@@ -1970,6 +1971,15 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         std::string buf((size_t)stat.m_uncomp_size, '\0');
                         if (mz_zip_reader_extract_to_mem(&archive, stat.m_file_index, buf.data(), buf.size(), 0))
                             model.cam_recipe = std::move(buf);
+                    }
+                }
+                else if (boost::algorithm::iequals(name, SHASHIMI_LASER_RECIPE_FILE)) {
+                    // Restore the laser project (optional; absent in projects without laser work).
+                    // Opaque here: LaserDocument::deserialize() rejects a corrupt blob.
+                    if (stat.m_uncomp_size > 0) {
+                        std::string buf((size_t)stat.m_uncomp_size, '\0');
+                        if (mz_zip_reader_extract_to_mem(&archive, stat.m_file_index, buf.data(), buf.size(), 0))
+                            model.laser_recipe = std::move(buf);
                     }
                 }
                 else if (boost::algorithm::iequals(name, CUT_INFORMATION_FILE)) {
@@ -6032,6 +6042,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool _add_layer_height_profile_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_cad_recipe_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_cam_recipe_file_to_archive(mz_zip_archive& archive, Model& model);
+        bool _add_laser_recipe_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_layer_config_ranges_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_brim_ear_points_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_sla_support_points_file_to_archive(mz_zip_archive& archive, Model& model);
@@ -6434,6 +6445,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             }
 
             if (!_add_cam_recipe_file_to_archive(archive, model)) {
+                close_zip_writer(&archive);
+                return false;
+            }
+
+            if (!_add_laser_recipe_file_to_archive(archive, model)) {
                 close_zip_writer(&archive);
                 return false;
             }
@@ -7713,6 +7729,19 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 (const void*)model.cam_recipe.data(), model.cam_recipe.length(),
                 MZ_DEFAULT_COMPRESSION)) {
             add_error("Unable to add CAM recipe file to archive");
+            return false;
+        }
+        return true;
+    }
+
+    bool _BBS_3MF_Exporter::_add_laser_recipe_file_to_archive(mz_zip_archive& archive, Model& model)
+    {
+        if (model.laser_recipe.empty())
+            return true;
+        if (!mz_zip_writer_add_mem(&archive, SHASHIMI_LASER_RECIPE_FILE.c_str(),
+                (const void*)model.laser_recipe.data(), model.laser_recipe.length(),
+                MZ_DEFAULT_COMPRESSION)) {
+            add_error("Unable to add laser project file to archive");
             return false;
         }
         return true;

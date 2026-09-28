@@ -11,6 +11,9 @@
 #include "libslic3r/MultiNozzleUtils.hpp"
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/PublishSettings.hpp"
+#ifdef SLIC3R_CAD
+#include "libslic3r/Laser/LaserDocument.hpp"
+#endif
 
 #include "test_utils.hpp"
 
@@ -426,6 +429,76 @@ SCENARIO("CAM recipe is embedded in the BBS 3mf archive", "[3mf][CAM]") {
         REQUIRE(dst_model.objects.size() == model.objects.size());
     }
 }
+
+#ifdef SLIC3R_CAD
+// The laser project rides as Metadata/shashimi_laser.bin, opaque to the 3MF code. Projects from
+// before the Laser tab have no entry and load with an empty recipe; a corrupt blob still loads
+// (LaserDocument::deserialize rejects it later, the project itself is fine).
+SCENARIO("Laser recipe is embedded in the BBS 3mf archive", "[3mf][LaserDoc]") {
+    GIVEN("a model carrying a laser_recipe") {
+        Model model;
+        std::string src = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+        REQUIRE(load_stl(src.c_str(), &model));
+        model.add_default_instances();
+        ScopedTemporaryDir backup_dir("shashimi_laser");
+        model.set_backup_path(backup_dir.string());
+
+        static const char corrupt_blob[] = "\x07\xff\xff\xff\xffgarbage";
+        const std::string corrupt(corrupt_blob, sizeof(corrupt_blob) - 1);
+        const int kind = GENERATE(0, 1, 2);   // none (old project), a real document, corrupt bytes
+        std::string laser;
+        if (kind == 1) {
+            Laser::LaserDocument doc;
+            Laser::LaserShape r;
+            r.type = Laser::ShapeType::Rect;
+            r.width = 30;
+            doc.add_shape(r);
+            doc.device_name = "Generic GRBL diode";
+            laser = doc.serialize();
+        } else if (kind == 2)
+            laser = corrupt;
+        model.laser_recipe = laser;
+
+        ScopedTemporaryFile temp(".3mf");
+        const std::string test_file = temp.string();
+        DynamicPrintConfig cfg;
+        StoreParams sp;
+        sp.path     = test_file.c_str();
+        sp.model    = &model;
+        sp.config   = &cfg;
+        sp.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence;
+        REQUIRE(store_bbs_3mf(sp));
+
+        std::string got;
+        REQUIRE(read_cad_recipe_entry(test_file, got, "Metadata/shashimi_laser.bin") == (kind != 0));
+
+        Model dst_model;
+        ScopedTemporaryDir dst_backup_dir("shashimi_laser_dst");
+        dst_model.set_backup_path(dst_backup_dir.string());
+        DynamicPrintConfig dst_config;
+        ConfigSubstitutionContext ctxt{ ForwardCompatibilitySubstitutionRule::Enable };
+        PlateDataPtrs        dst_plates;
+        std::vector<Preset*> project_presets;
+        bool   is_bbl_3mf = false, is_orca_3mf = false;
+        Semver file_version;
+        REQUIRE(load_bbs_3mf(test_file.c_str(), &dst_config, &ctxt, &dst_model, &dst_plates,
+                             &project_presets, &is_bbl_3mf, &is_orca_3mf, &file_version, nullptr,
+                             LoadStrategy::LoadModel | LoadStrategy::LoadConfig));
+        release_PlateData_list(dst_plates);
+        REQUIRE(dst_model.laser_recipe == laser);
+        REQUIRE(dst_model.objects.size() == model.objects.size());
+
+        Laser::LaserDocument doc;
+        REQUIRE(doc.deserialize(dst_model.laser_recipe) == (kind != 2));
+        if (kind == 1) {
+            REQUIRE(doc.shapes.size() == 1);
+            REQUIRE(doc.shapes[0].width == 30);
+            REQUIRE(doc.device_name == "Generic GRBL diode");
+        } else
+            REQUIRE(doc.empty());
+    }
+}
+#endif // SLIC3R_CAD
 
 // .3mf multi-nozzle round-trip.
 // Locks the load/save handling for the H2C multi-nozzle plate metadata:

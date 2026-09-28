@@ -842,6 +842,12 @@ if (SLIC3R_CAD)
         GUI/CAD/SketchInlineEditor.hpp
         GUI/CAD/McpControl.cpp
         GUI/CAD/McpControl.hpp
+        GUI/Laser/LaserCanvas.cpp
+        GUI/Laser/LaserCanvas.hpp
+        GUI/Laser/LaserDialogs.cpp
+        GUI/Laser/LaserDialogs.hpp
+        GUI/Laser/LaserPanel.cpp
+        GUI/Laser/LaserPanel.hpp
         GUI/Gizmos/GLGizmoSketch.cpp
         GUI/Gizmos/GLGizmoSketch.hpp
         # Needs GeometryEngine (make_primitive / apply_fillet / tessellate).

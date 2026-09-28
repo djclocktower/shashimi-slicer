@@ -70,7 +70,12 @@ if (SLIC3R_CAD)
         test_cam_2d.cpp
         test_cam_drill.cpp
         test_cam_post.cpp
-        test_laser_image.cpp)
+        test_laser_image.cpp
+        test_laser_document.cpp
+        test_laser_vector.cpp
+        test_laser_plan.cpp
+        test_laser_gcode.cpp
+        test_laser_import.cpp)
 endif ()
 
 if (TARGET OpenVDB::openvdb)

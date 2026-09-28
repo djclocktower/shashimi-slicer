@@ -40,6 +40,7 @@
 #include "Plater.hpp"
 #ifdef SLIC3R_CAD
 #include "slic3r/GUI/CAD/CadTabPage.hpp"
+#include "slic3r/GUI/Laser/LaserPanel.hpp"
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
 #include "slic3r/GUI/CAD/McpControl.hpp"
 #endif
@@ -1102,6 +1103,10 @@ void MainFrame::update_layout()
             m_tabpanel->InsertPage(prepare_pos++, TAB_ID_MODELING, m_modeling_tab, _L("Modeling"), "tab_modeling_active");
             m_tabpanel->InsertPage(prepare_pos++, TAB_ID_CAM, m_cam_tab, _L("CAM"), "tab_cam_active");
         }
+        if (m_laser_page != nullptr) {
+            m_laser_page->Reparent(m_tabpanel);
+            m_tabpanel->InsertPage(prepare_pos++, TAB_ID_LASER, m_laser_page, _L("Laser"), "tab_laser_active");
+        }
 #endif
         m_tabpanel->InsertPage(prepare_pos, TAB_ID_PREPARE, m_plater, _L("Prepare"), "tab_3d_active");
         m_tabpanel->InsertPage(prepare_pos + 1, TAB_ID_PREVIEW, m_plater, _L("Preview"), "tab_preview_active");
@@ -1424,6 +1429,8 @@ void MainFrame::init_tabpanel() {
     m_sketch_tab    = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Sketch);
     m_modeling_tab  = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Modeling);
     m_cam_tab       = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Cam);
+    m_laser_page    = new LazyPage<LaserPanel>(this, TAB_ID_LASER, -1);
+    m_lazy_pages.push_back(m_laser_page);
     // A mode change inside the workspace (starting or finishing a sketch) asks for the tab it
     // belongs to. Queued: it fires from inside the panel's own event handlers.
     DesignPanel::when_built([this](DesignPanel& design) {

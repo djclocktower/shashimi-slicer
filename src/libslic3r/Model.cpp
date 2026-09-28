@@ -110,6 +110,7 @@ Model& Model::assign_copy(const Model &rhs)
 
     this->cad_recipe = rhs.cad_recipe;
     this->cam_recipe = rhs.cam_recipe;
+    this->laser_recipe = rhs.laser_recipe;
 
     return *this;
 }
@@ -157,6 +158,7 @@ Model& Model::assign_copy(Model &&rhs)
     rhs.profile_info.reset();
     this->cad_recipe = std::move(rhs.cad_recipe);
     this->cam_recipe = std::move(rhs.cam_recipe);
+    this->laser_recipe = std::move(rhs.laser_recipe);
     return *this;
 }
 

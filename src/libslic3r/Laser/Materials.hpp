@@ -26,7 +26,9 @@ std::vector<MaterialEntry> default_materials(LaserSource source);
 bool load_materials(const std::string& path, std::vector<MaterialEntry>& out, std::string* error = nullptr);
 bool save_materials(const std::string& path, const std::vector<MaterialEntry>& entries, std::string* error = nullptr);
 
-// "Generic GRBL diode" (400x400, front-left, S1000, M4) and "Generic GRBL CO2" (600x400).
+// Built-in profiles: "Generic GRBL diode" (400x400, front-left, S1000, M4), "Ortur/Atomstack/
+// Sculpfun-class diode", "Generic GRBL CO2" (600x400), "grblHAL", "Marlin laser" (inline M3 I,
+// S255) and "Smoothie/Cohesion3D". JSON keys are the struct member names; missing keys keep defaults.
 std::vector<LaserDevice> default_devices();
 bool load_devices(const std::string& path, std::vector<LaserDevice>& out, std::string* error = nullptr);
 bool save_devices(const std::string& path, const std::vector<LaserDevice>& devices, std::string* error = nullptr);
