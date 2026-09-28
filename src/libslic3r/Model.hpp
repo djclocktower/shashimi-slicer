@@ -1572,6 +1572,9 @@ public:
     // Opaque parametric CAD recipe (CadDocument::serialize_recipe()), round-tripped through
     // the 3MF as Metadata/orca_cad.bin. Empty for non-CAD projects.
     std::string cad_recipe;
+    // Opaque CAM recipe (CAM::CamDocument::serialize()), round-tripped through the 3MF as
+    // Metadata/shashimi_cam.bin. Empty for projects without CAM.
+    std::string cam_recipe;
 
     void SetDesigner(std::string designer, std::string designer_user_id) {
         if (design_info == nullptr) {

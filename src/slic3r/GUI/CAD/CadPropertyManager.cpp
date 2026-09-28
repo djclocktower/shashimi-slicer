@@ -214,6 +214,13 @@ void CadPropertyManager::expand(wxSizer* group)
         if (g->outer == group && !g->expanded) toggle(*g);
 }
 
+bool CadPropertyManager::is_expanded(wxSizer* group) const
+{
+    for (const auto& g : m_groups)
+        if (g->outer == group) return g->expanded;
+    return true;
+}
+
 void CadPropertyManager::reapply_collapsed()
 {
     for (auto& g : m_groups)
@@ -226,6 +233,7 @@ void CadPropertyManager::toggle(Group& g)
     g.expanded = !g.expanded;
     g.outer->Show(g.content, g.expanded);
     g.header->Refresh();
+    if (m_on_group_toggled) m_on_group_toggled();
     relayout(g.header->GetParent());
 }
 

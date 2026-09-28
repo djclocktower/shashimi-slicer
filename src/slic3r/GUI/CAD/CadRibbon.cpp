@@ -261,7 +261,7 @@ CadRibbon::CadRibbon(wxWindow* parent)
 
     m_book = new wxSimplebook(this, wxID_ANY);
     m_book->SetBackgroundColour(CadTheme::ribbon_bg());
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < kPages; ++i) {
         // Horizontal scroll only: a narrow window must still reach the far-right commands
         // (Send to Plater) rather than clipping them off the edge.
         auto* page = new wxScrolledWindow(m_book, wxID_ANY);
@@ -278,7 +278,7 @@ CadRibbon::CadRibbon(wxWindow* parent)
 
     m_tail_book = new wxSimplebook(this, wxID_ANY);
     m_tail_book->SetBackgroundColour(CadTheme::ribbon_bg());
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < kPages; ++i) {
         m_tails[i] = new wxPanel(m_tail_book, wxID_ANY);
         m_tails[i]->SetBackgroundColour(CadTheme::ribbon_bg());
         m_tail_sizers[i] = new wxBoxSizer(wxHORIZONTAL);

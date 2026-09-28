@@ -93,12 +93,13 @@ private:
 };
 
 // The SolidWorks CommandManager: one row of large command buttons grouped by thin separators,
-// with one page of tools per CAD tab (Sketch / Features), a small corner group shared by both on
+// with one page of tools per CAD tab (Sketch / Features / CAM), a small corner group shared by both on
 // the left, and a per-page tail on the right that never scrolls away (Send to Plater, the mode).
 class CadRibbon : public wxPanel
 {
 public:
-    enum class Page { Sketch, Features };
+    enum class Page { Sketch, Features, Cam };
+    static constexpr int kPages = 3;
 
     explicit CadRibbon(wxWindow* parent);
 
@@ -132,11 +133,11 @@ private:
     wxPanel*                               m_corner{nullptr};
     wxBoxSizer*                            m_corner_sizer{nullptr};
     wxSimplebook*                          m_book{nullptr};
-    wxScrolledWindow*                      m_pages[2]{nullptr, nullptr};
-    wxBoxSizer*                            m_page_sizers[2]{nullptr, nullptr};
+    wxScrolledWindow*                      m_pages[kPages]{};
+    wxBoxSizer*                            m_page_sizers[kPages]{};
     wxSimplebook*                          m_tail_book{nullptr};
-    wxPanel*                               m_tails[2]{nullptr, nullptr};
-    wxBoxSizer*                            m_tail_sizers[2]{nullptr, nullptr};
+    wxPanel*                               m_tails[kPages]{};
+    wxBoxSizer*                            m_tail_sizers[kPages]{};
     Page                                   m_page{Page::Features};
     std::map<std::string, CadToolButton*>  m_buttons;
 };

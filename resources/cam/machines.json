@@ -1,0 +1,16 @@
+{
+  "machines": [
+    { "name": "Generic 3-axis", "min_rpm": 0, "max_rpm": 24000, "max_feed_xy": 5000, "max_feed_z": 1000, "rapid_feed": 5000,
+      "travel": [300, 300, 100], "has_a_axis": false, "post": "grbl", "tool_change": "pause", "spindle_control": true, "coolant": false },
+    { "name": "Generic 4-axis (A about X)", "min_rpm": 0, "max_rpm": 24000, "max_feed_xy": 3000, "max_feed_z": 1000, "rapid_feed": 4000,
+      "travel": [300, 200, 150], "has_a_axis": true, "post": "linuxcnc", "tool_change": "pause", "spindle_control": true, "coolant": false },
+    { "name": "GRBL router (Shapeoko/X-Carve class)", "min_rpm": 10000, "max_rpm": 30000, "max_feed_xy": 5000, "max_feed_z": 1500, "rapid_feed": 5000,
+      "travel": [830, 830, 100], "has_a_axis": false, "post": "grbl", "tool_change": "pause", "spindle_control": true, "coolant": false },
+    { "name": "3018-class desktop CNC", "min_rpm": 0, "max_rpm": 10000, "max_feed_xy": 1000, "max_feed_z": 500, "rapid_feed": 1500,
+      "travel": [300, 180, 45], "has_a_axis": false, "post": "grbl", "tool_change": "pause", "spindle_control": true, "coolant": false },
+    { "name": "LinuxCNC mill", "min_rpm": 100, "max_rpm": 5000, "max_feed_xy": 2500, "max_feed_z": 1000, "rapid_feed": 3000,
+      "travel": [400, 200, 300], "has_a_axis": false, "post": "linuxcnc", "tool_change": "m6", "spindle_control": true, "coolant": true },
+    { "name": "Mach3/Mach4 mill", "min_rpm": 100, "max_rpm": 5000, "max_feed_xy": 2500, "max_feed_z": 1000, "rapid_feed": 3000,
+      "travel": [400, 200, 300], "has_a_axis": false, "post": "mach3", "tool_change": "m6", "spindle_control": true, "coolant": true }
+  ]
+}

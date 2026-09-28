@@ -20,6 +20,13 @@ namespace Slic3r::CAM {
 std::string post_process(const CamDocument& doc, const std::vector<int>& op_indices,
                          const PostOptions& opts, std::string* error = nullptr);
 
+// Options suited to `machine`'s dialect: arcs off for Marlin, line numbers for Fanuc, inverse
+// time for LinuxCNC/Fanuc 4-axis machines.
+PostOptions default_post_options(const MachineProfile& machine);
+
+// Plain-language dialect name ("GRBL", "LinuxCNC", ...).
+const char* dialect_name(PostDialect d);
+
 bool dialect_has_canned_cycles(PostDialect d);   // LinuxCNC, Mach3, Fanuc
 bool dialect_has_inverse_time(PostDialect d);    // LinuxCNC, Fanuc
 bool dialect_has_tool_length_comp(PostDialect d); // G43: LinuxCNC, Mach3, Fanuc

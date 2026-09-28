@@ -266,6 +266,9 @@ struct CamOperation {
     double      lift_height{0.2};
     double      helix_angle_deg{2.0};
 
+    // Parallel3D / RotaryFinish: cut in both directions (zig-zag); false = every pass the same way.
+    bool        bidirectional{true};
+
     template<class Archive> void serialize(Archive& ar)
     {
         ar(type, name, enabled, setup_index, tool_number, feeds_auto, feeds, geom, heights,
@@ -276,7 +279,8 @@ struct CamOperation {
            chamfer_width, tip_offset,
            angle_deg, boundary,
            wrap_radius, a_stepover_deg, rotary_spiral, wrap_strategy,
-           optimal_load, min_stepdown, lift_height, helix_angle_deg);
+           optimal_load, min_stepdown, lift_height, helix_angle_deg,
+           bidirectional);
     }
 };
 
@@ -290,12 +294,16 @@ struct Move {
     enum class Kind { Rapid, Feed, Plunge, Ramp, LeadIn, LeadOut, ArcCW, ArcCCW, Retract };
     Kind   kind{Kind::Rapid};
     Vec3d  to{0, 0, 0};       // setup frame
-    double a_deg{0};          // absolute A position at the end of the move
+    double a_deg{0};          // absolute A position at the end of the move (turns <= 180 deg per move: the post unwraps)
     Vec3d  center{0, 0, 0};   // arc centre (XY plane, G17); Z ignored
     double feed{0};           // mm/min; 0 for Rapid
     // Kind carries the display/feed meaning. A LeadIn/LeadOut/Ramp move can also be an arc
     // (lead arcs, helical ramps): `arc` says so. Use is_arc()/arc_dir() instead of testing Kind.
     ArcDir arc{ArcDir::None};
+    // Drill ops: index of the hole whose canned cycle this move belongs to (-1: not part of one).
+    // The run of moves sharing it leaves the R plane (the position before the run) and returns
+    // to it; the post collapses the run into one G81/G82/G83/G73/G85/G84 line or emits it as is.
+    int    cycle{-1};
 };
 
 inline ArcDir arc_dir(const Move& m)
@@ -314,8 +322,8 @@ struct Warning {
 
 struct Toolpath {
     std::vector<Move>    moves;
-    double               cut_length{0};    // mm, every non-Rapid move
-    double               rapid_length{0};  // mm
+    double               cut_length{0};    // mm, every move but Rapid/Retract (both run at rapid)
+    double               rapid_length{0};  // mm, Rapid + Retract
     double               time_s{0};
     std::string          error;            // non-empty: generation failed; moves may be partial
     std::vector<Warning> warnings;
@@ -388,6 +396,7 @@ struct PostOptions {
     bool           inverse_time{false};   // G93 on A moves where the dialect supports it
     bool           line_numbers{false};
     bool           comments{true};
+    bool           a_modulo{false};    // A words as [0, 360) instead of unwrapped continuous angles
 };
 
 } // namespace Slic3r::CAM

@@ -11,6 +11,7 @@
 
 #include "libslic3r/CAD/CadDocument.hpp"
 #include "libslic3r/ObjectID.hpp"
+#include "slic3r/GUI/CAD/CamController.hpp"
 #include "slic3r/GUI/CAD/DesignInteraction.hpp"   // CadLevel: what one Esc press means
 #include "slic3r/GUI/Lazy.hpp"
 
@@ -51,9 +52,10 @@ class CadPropertyManager;
 class DesignPanel : public wxPanel, public LazyInstance<DesignPanel>
 {
 public:
-    // The two top-bar tabs this one panel is shown under (CadTabPage hosts it). Both show the
-    // same document, viewport and camera; the tab only picks the ribbon's tool set.
-    enum class WorkspaceTab { Sketch, Modeling };
+    // The top-bar tabs this one panel is shown under (CadTabPage hosts it). All show the same
+    // document, viewport and camera; the tab picks the ribbon's tool set (and, for CAM, the left
+    // pane and the viewport's CAM layer).
+    enum class WorkspaceTab { Sketch, Modeling, Cam };
 
     explicit DesignPanel(wxWindow* parent);
     // Called by the hosting CadTabPage each time its tab is shown: stores the tab and runs
@@ -99,6 +101,7 @@ public:
     // Defined out of line in DesignPanel.cpp: it needs kOfferVerbs, which this header deliberately
     // does not include (the table is generated and belongs to the offer-menu code).
     bool mcp_run_verb(const char* verb_id);
+    CamController* cam_ui() { return m_cam_ui.get(); }
 
 protected:
     // Runs whenever set_workspace_tab() is called (every show of a CAD tab), with
@@ -411,6 +414,12 @@ private:
     void       update_reference_planes(); // persistent XY/XZ/YZ reference planes (fallback when no object)
 
     CadDocument m_doc;
+    // The CAM recipe of the same project (Model::cam_recipe), and its UI (the CAM tab).
+    CAM::CamDocument               m_cam;
+    std::unique_ptr<CamController> m_cam_ui;
+    bool                           m_cam_shown{false};   // the CAM tab is the current workspace tab
+    friend struct CamController::Impl;
+    friend class CamController;
 
     Tool      m_active{Tool::None};
 
@@ -963,6 +972,10 @@ private:
     wxSizer*          m_constraint_rows{nullptr};
     int               m_constraint_sel{-1};   // highlighted constraint row, or -1
 };
+
+// Runs `work` on a worker thread while the UI stays painted but input-blocked; a progress dialog
+// appears only when it takes longer than ~300 ms.
+void run_off_ui_thread(wxWindow* parent, const wxString& message, const std::function<void()>& work);
 
 }} // namespace Slic3r::GUI
 

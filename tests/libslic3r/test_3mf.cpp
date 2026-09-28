@@ -377,6 +377,56 @@ SCENARIO("a project saved under the pre-rename recipe name still loads", "[3mf][
     }
 }
 
+// The CAM recipe (tools, setups, operations) rides next to the CAD recipe as its own entry.
+// Projects written before CAM existed have no such entry and must load with an empty recipe.
+SCENARIO("CAM recipe is embedded in the BBS 3mf archive", "[3mf][CAM]") {
+    GIVEN("a model carrying a binary cam_recipe") {
+        Model model;
+        std::string src = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+        REQUIRE(load_stl(src.c_str(), &model));
+        model.add_default_instances();
+        ScopedTemporaryDir backup_dir("shashimi_cam");
+        model.set_backup_path(backup_dir.string());
+
+        static const char blob[] = "\x01" "CAM" "\0" "\xff\x00" "cam-ops-blob";
+        const std::string cam(blob, sizeof(blob) - 1);
+        const bool        with_cam = GENERATE(true, false);
+        model.cad_recipe = make_cad_recipe();
+        if (with_cam)
+            model.cam_recipe = cam;
+
+        ScopedTemporaryFile temp(".3mf");
+        const std::string test_file = temp.string();
+        DynamicPrintConfig cfg;
+        StoreParams sp;
+        sp.path     = test_file.c_str();
+        sp.model    = &model;
+        sp.config   = &cfg;
+        sp.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence;
+        REQUIRE(store_bbs_3mf(sp));
+
+        std::string got;
+        REQUIRE(read_cad_recipe_entry(test_file, got, "Metadata/shashimi_cam.bin") == with_cam);
+
+        Model dst_model;
+        ScopedTemporaryDir dst_backup_dir("shashimi_cam_dst");
+        dst_model.set_backup_path(dst_backup_dir.string());
+        DynamicPrintConfig dst_config;
+        ConfigSubstitutionContext ctxt{ ForwardCompatibilitySubstitutionRule::Enable };
+        PlateDataPtrs        dst_plates;
+        std::vector<Preset*> project_presets;
+        bool   is_bbl_3mf = false, is_orca_3mf = false;
+        Semver file_version;
+        REQUIRE(load_bbs_3mf(test_file.c_str(), &dst_config, &ctxt, &dst_model, &dst_plates,
+                             &project_presets, &is_bbl_3mf, &is_orca_3mf, &file_version, nullptr,
+                             LoadStrategy::LoadModel | LoadStrategy::LoadConfig));
+        release_PlateData_list(dst_plates);
+        REQUIRE(dst_model.cad_recipe == model.cad_recipe);
+        REQUIRE(dst_model.cam_recipe == (with_cam ? cam : std::string()));
+        REQUIRE(dst_model.objects.size() == model.objects.size());
+    }
+}
+
 // .3mf multi-nozzle round-trip.
 // Locks the load/save handling for the H2C multi-nozzle plate metadata:
 //   * filament_volume_maps  -> plate config "filament_volume_map" (with the >1 -> 0 clamp)

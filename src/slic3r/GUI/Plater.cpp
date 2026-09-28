@@ -9608,7 +9608,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
             // plain model into the open project leaves the current recipe alone.
             if (is_project_file) {
                 q->model().cad_recipe = model.cad_recipe;
-                loaded_cad_recipe     = !model.cad_recipe.empty();
+                q->model().cam_recipe = model.cam_recipe;
+                loaded_cad_recipe     = !model.cad_recipe.empty() || !model.cam_recipe.empty();
             }
 
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", finished load_model_objects");
@@ -10408,6 +10409,7 @@ void Plater::priv::reset(bool apply_presets_change, bool reload_presets)
     // clear_objects() only drops the ModelObjects; the CAD recipe is Model-level state and would
     // otherwise be written into every project saved for the rest of the session.
     model.cad_recipe.clear();
+    model.cam_recipe.clear();
 #ifdef SLIC3R_CAD
     // Same reason, one level up: the Design tab keeps the editable document, not the Model, so
     // clearing the recipe alone leaves the tab showing the previous project's feature tree —
@@ -15928,7 +15930,7 @@ bool Plater::up_to_date(bool saved, bool backup)
     // tree is real work: treating it as an empty project skipped both the autosave and the
     // "unsaved changes" prompt, so quitting threw it away without asking. Non-CAD projects
     // never carry a recipe, so the empty-project shortcut is unchanged for them.
-    return (p->model.objects.empty() && p->model.cad_recipe.empty()) ||
+    return (p->model.objects.empty() && p->model.cad_recipe.empty() && p->model.cam_recipe.empty()) ||
            (p->up_to_date(saved, backup) && !Slic3r::has_other_changes(backup));
 }
 

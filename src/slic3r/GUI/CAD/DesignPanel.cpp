@@ -2825,6 +2825,10 @@ DesignPanel::DesignPanel(wxWindow* parent)
     // the viewport highlights only it (cyan) and its Sketch feature's tree row is selected.
     // The (feature, region) pair is remembered so Extrude builds just that one loop.
     m_viewport->set_on_display_sketch_selected([this](int feat, int region, int entity) {
+        if (m_cam_shown && m_cam_ui) {
+            m_cam_ui->on_sketch_pick(feat);
+            return;
+        }
         if (feat < 0 || feat >= int(m_doc.features.size())) return;
         m_sel_sketch_feat   = feat;
         m_sel_sketch_region = region;
@@ -2904,6 +2908,10 @@ DesignPanel::DesignPanel(wxWindow* parent)
     // Clicking a solid cycles whole -> face -> edge. The tool draws the cyan overlay for ALL
     // levels now (per-body, so other bodies stay untinted) — no whole-compound set_body_highlight.
     m_viewport->set_on_solid_selection_changed([this](int level, int body, int face, int edge) {
+        if (m_cam_shown && m_cam_ui) {   // CAM tab: picks feed the open Setup / Operation page
+            m_cam_ui->on_solid_pick(level, body, face, edge);
+            return;
+        }
         // A pick that fell through the move gizmo (clicked off the arrows) exits move mode.
         if (m_viewport->moving_body()) m_viewport->clear_move_gizmo();
         // Remember which body + face/edge so Extrude / dress-up target the RIGHT body.
@@ -3362,6 +3370,11 @@ DesignPanel::DesignPanel(wxWindow* parent)
         // makes the field behave the same everywhere WITHOUT fighting the window manager for focus,
         // which is what seven earlier attempts did unsuccessfully. When the field DOES hold focus we
         // deliberately do nothing here, so its own bindings run and typing keeps working.
+        // CAM tab: its own few keys (Esc, Delete, Space); everything else goes to the focused control.
+        if (m_cam_shown && m_cam_ui) {
+            if (in_text || !m_cam_ui->on_key(e)) e.Skip();
+            return;
+        }
         if (m_viewport && m_viewport->inline_busy() && !m_viewport->inline_has_focus()) {
             if (key == WXK_RETURN || key == WXK_NUMPAD_ENTER || key == WXK_TAB) {
                 m_viewport->inline_commit();
@@ -3473,7 +3486,9 @@ DesignPanel::DesignPanel(wxWindow* parent)
 
     // The offer (§4.1): right-click the geometry, get the verbs that apply to it. Left-click
     // still only selects, so pointing at things stays quiet.
-    m_viewport->set_on_context_menu([this](const wxPoint& p) { show_offer_menu(p); });
+    m_viewport->set_on_context_menu([this](const wxPoint& p) {
+        if (!m_cam_shown) show_offer_menu(p);   // the modelling offer has nothing for the CAM tab
+    });
 
     // The Line tool's length and the Dimension tool's value are both entered in-canvas now
     // (live quote labels + the floating SketchInlineEditor), so the old docked-card
@@ -3491,6 +3506,10 @@ DesignPanel::DesignPanel(wxWindow* parent)
         m_doc.recompute();
         sync_sketch_display();
     });
+
+    // CAM tab: its tree and PropertyManager are pages 2 and 3 of the left book, its simulation
+    // bar sits over the viewport. Built here, once the viewport and the left book exist.
+    m_cam_ui = std::make_unique<CamController>(*this);
 
     auto* vcol = new wxBoxSizer(wxVERTICAL);
     // The sketch banner sits ABOVE the viewport rather than floating inside it: a child window
@@ -3510,6 +3529,7 @@ DesignPanel::DesignPanel(wxWindow* parent)
     }
     m_sketch_banner->Hide();
     vcol->Add(m_sketch_banner, 0, wxEXPAND);
+    vcol->Add(m_cam_ui->sim_bar(), 0, wxEXPAND);
     // The bottom 3D-navigator orb handles all view orientation, so no separate view buttons.
     // Fit view is a double-click on the viewport (the tool intercepts it -> zoom_to_volumes).
     vcol->Add(m_viewport, 1, wxEXPAND);
@@ -3605,7 +3625,21 @@ void DesignPanel::on_workspace_tab_changed()
 {
     if (m_ribbon == nullptr) return;
     m_ribbon->set_page(m_workspace_tab == WorkspaceTab::Sketch ? CadRibbon::Page::Sketch
+                       : m_workspace_tab == WorkspaceTab::Cam  ? CadRibbon::Page::Cam
                                                                : CadRibbon::Page::Features);
+    const bool cam = m_workspace_tab == WorkspaceTab::Cam;
+    if (cam != m_cam_shown && m_cam_ui) {
+        m_cam_shown = cam;
+        if (cam) {
+            // CAM works on the finished model: a live sketch or open command is closed first.
+            if (m_ui_mode != UiMode::Feature) tool_confirm();
+            if (m_active != Tool::None) tool_cancel();
+            m_cam_ui->on_tab_entered();
+        } else {
+            m_cam_ui->on_tab_left();
+            show_left_page(m_pm_active);
+        }
+    }
     update_ribbon_state();
 }
 
@@ -3749,6 +3783,17 @@ void DesignPanel::run_feature_command(const std::function<void()>& action)
 
 void DesignPanel::show_left_page(bool property_manager)
 {
+    if (m_cam_shown && m_cam_ui && m_left_book) {
+        const bool pm = property_manager && m_cam_ui->pm_active();
+        m_left_book->ChangeSelection(pm ? 3 : 2);
+        if (m_tab_fm) m_tab_fm->set_checked(!pm);
+        if (m_tab_pm) {
+            m_tab_pm->set_checked(pm);
+            m_tab_pm->Enable(m_cam_ui->pm_active());
+        }
+        if (m_left) m_left->Layout();
+        return;
+    }
     if (property_manager && !m_pm_active) property_manager = false;   // nothing to show
     if (m_left_book) m_left_book->ChangeSelection(property_manager ? 1 : 0);
     if (m_tab_fm) m_tab_fm->set_checked(!property_manager);
@@ -4374,7 +4419,10 @@ void DesignPanel::build_ribbon()
                                         _L("Send to Plater (Ctrl+Shift+P) — the solids go to Prepare for slicing"),
                                         feature([this] { on_commit(); })}, true);
 
-    r->set_page(m_workspace_tab == WorkspaceTab::Sketch ? Page::Sketch : Page::Features);
+    if (m_cam_ui) m_cam_ui->build_ribbon(*r);
+    r->set_page(m_workspace_tab == WorkspaceTab::Sketch ? Page::Sketch
+                : m_workspace_tab == WorkspaceTab::Cam  ? Page::Cam
+                                                        : Page::Features);
 }
 
 // Paint the DoF line. Split out of the solve callback so entering Constrain can re-apply the
@@ -4415,10 +4463,15 @@ void DesignPanel::set_ui_mode(UiMode m)
     // A mode change that belongs to the other CAD tab asks for that tab. Only on a real change
     // and only while the workspace is on screen: many paths re-assert Feature (and New Project
     // cancels a sketch from Prepare), and none of those may pull the user onto a CAD tab.
-    const WorkspaceTab wanted = (m == UiMode::Feature) ? WorkspaceTab::Modeling : WorkspaceTab::Sketch;
-    if (m != m_ui_mode && wanted != m_workspace_tab && !m_applying_workspace_tab
-        && m_on_request_workspace_tab && IsShownOnScreen())
-        m_on_request_workspace_tab(wanted);
+    // Leaving a sketch goes back to Modeling only from the Sketch tab: Feature is re-asserted on
+    // many paths (CAM entry among them), and none of those may pull the user off the CAM tab.
+    if (m != m_ui_mode && !m_applying_workspace_tab && m_on_request_workspace_tab && IsShownOnScreen()) {
+        if (m == UiMode::Feature) {
+            if (m_workspace_tab == WorkspaceTab::Sketch) m_on_request_workspace_tab(WorkspaceTab::Modeling);
+        } else if (m_workspace_tab != WorkspaceTab::Sketch) {
+            m_on_request_workspace_tab(WorkspaceTab::Sketch);
+        }
+    }
     m_ui_mode = m;
     if (m != UiMode::Sketch) m_sketch_on.clear();   // no stale "on the picked face" on the next hint
     // The DoF readout describes a SKETCH's constraint state, so it means nothing back in Feature
@@ -4618,7 +4671,7 @@ void DesignPanel::on_import_svg()
 // app unresponsive and nothing repainted. The dialog is app-modal, so the document cannot be
 // touched while the worker owns it. Exceptions must not escape the worker: `work` is expected
 // to swallow them (OCCT throws Standard_Failure, which is not a std::exception).
-static void run_off_ui_thread(wxWindow* parent, const wxString& message, const std::function<void()>& work)
+void run_off_ui_thread(wxWindow* parent, const wxString& message, const std::function<void()>& work)
 {
     std::atomic<bool> done{false};
     std::thread worker([&work, &done]() {
@@ -4667,6 +4720,7 @@ void DesignPanel::sync_recipe_to_model()
     Plater* plater = wxGetApp().plater();
     if (plater == nullptr) return;
     // An empty document CLEARS it, so a non-CAD project never carries a stale recipe.
+    if (m_cam_ui) m_cam_ui->on_cad_changed();   // new topology: CAM geometry rebuilt, toolpaths stale
     std::string recipe = m_doc.features.empty() ? std::string() : m_doc.serialize_recipe();
     if (recipe == plater->model().cad_recipe)
         return;   // no change — this is the rehydrate of a project that was just opened
@@ -6951,6 +7005,9 @@ void DesignPanel::on_tab_shown()
             if (!blob.empty()) load_recipe(blob);
         }
     }
+    if (m_cam_ui && m_cam.setups.empty() && m_cam.operations.empty())
+        if (Plater* plater = wxGetApp().plater(); plater && !plater->model().cam_recipe.empty())
+            m_cam_ui->load_recipe(plater->model().cam_recipe);
     update_reference_planes();   // entering the Design tab: show the XY/XZ/YZ planes if no object yet
     sync_sidebar_width();        // keep the panel as wide as Prepare's so the canvas edge doesn't jump
     if (m_viewport) m_viewport->force_repaint();   // the page was just re-shown: paint it for real
@@ -7356,6 +7413,7 @@ void DesignPanel::clear_document()
 {
     tool_cancel();                 // leave any active tool / sketch / constrain cleanly
     m_doc.clear();                 // features + bodies + meshes + history
+    if (m_cam_ui) m_cam_ui->clear();   // the CAM recipe goes with its project
     m_sent_objects.clear();        // a new design updates none of the old one's plate objects
     m_match_plate_names = false;
     m_edit_index = -1;

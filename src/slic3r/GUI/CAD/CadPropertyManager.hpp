@@ -51,6 +51,11 @@ public:
     void     wrap_in_group(wxWindow* parent, wxSizer* box, const wxString& title, bool expanded = true);
     // Open a collapsed group (by the sizer make_group returned).
     void     expand(wxSizer* group);
+    bool     is_expanded(wxSizer* group) const;
+    // Called after a group opens or closes, before the relayout: a page that shows only some of a
+    // group's rows (the CAM operation page) hides the others again here, since opening a group
+    // shows everything in it.
+    void     set_on_group_toggled(std::function<void()> cb) { m_on_group_toggled = std::move(cb); }
     // Showing a card re-shows everything under it recursively (wxSizer::Show), collapsed group
     // contents included. Call after any card show to put the collapsed ones back.
     void     reapply_collapsed();
@@ -85,6 +90,7 @@ private:
 
     std::function<void()>               m_on_ok;
     std::function<void()>               m_on_cancel;
+    std::function<void()>               m_on_group_toggled;
     std::vector<std::unique_ptr<Group>> m_groups;
 };
 

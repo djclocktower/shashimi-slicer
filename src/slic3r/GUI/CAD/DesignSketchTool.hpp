@@ -173,7 +173,12 @@ public:
     int  m_pick_press_y = 0;
     bool m_pick_pending = false;
 
-    bool has_display() const { return m_active || !m_display_sketches.empty()
+    // Extra scene layer drawn by the host (the CAM workspace: stock, toolpaths, simulated tool).
+    // Runs inside render(), after the view helpers, while overlay_on is set.
+    std::function<void()> on_render_overlay;
+    bool                  overlay_on{false};
+
+    bool has_display() const { return m_active || overlay_on || !m_display_sketches.empty()
                                       || (m_solid_bodies != nullptr && !m_solid_bodies->empty())
                                       || !m_datum_planes.empty()
                                       || m_show_planes || m_show_axes

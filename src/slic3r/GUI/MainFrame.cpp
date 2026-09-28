@@ -1094,11 +1094,13 @@ void MainFrame::update_layout()
 #ifdef SLIC3R_CAD
         // Sketch and Modeling sit between Home and Prepare, so they go in first and push
         // Prepare along.
-        if (m_sketch_tab != nullptr && m_modeling_tab != nullptr) {
+        if (m_sketch_tab != nullptr && m_modeling_tab != nullptr && m_cam_tab != nullptr) {
             m_sketch_tab->Reparent(m_tabpanel);
             m_modeling_tab->Reparent(m_tabpanel);
+            m_cam_tab->Reparent(m_tabpanel);
             m_tabpanel->InsertPage(prepare_pos++, TAB_ID_SKETCH, m_sketch_tab, _L("Sketch"), "tab_sketch_active");
             m_tabpanel->InsertPage(prepare_pos++, TAB_ID_MODELING, m_modeling_tab, _L("Modeling"), "tab_modeling_active");
+            m_tabpanel->InsertPage(prepare_pos++, TAB_ID_CAM, m_cam_tab, _L("CAM"), "tab_cam_active");
         }
 #endif
         m_tabpanel->InsertPage(prepare_pos, TAB_ID_PREPARE, m_plater, _L("Prepare"), "tab_3d_active");
@@ -1362,7 +1364,7 @@ void MainFrame::init_tabpanel() {
         //else if (panel == m_param_panel)
         //    m_param_panel->OnActivate();
 #ifdef SLIC3R_CAD
-        else if (panel != nullptr && (panel == m_sketch_tab || panel == m_modeling_tab)) {
+        else if (panel != nullptr && (panel == m_sketch_tab || panel == m_modeling_tab || panel == m_cam_tab)) {
             // Moves the shared CAD workspace onto this page (Show() normally has already) and
             // switches its ribbon to this tab. Entering from a non-CAD page also re-syncs the
             // bed to the active printer: the panel is built before the printer profile is fully
@@ -1377,7 +1379,7 @@ void MainFrame::init_tabpanel() {
 #ifdef SLIC3R_CAD
         // Any page that is not a CAD tab takes the CAD status line down with it — see
         // DesignPanel::on_tab_hidden for why the popup does not follow the page on its own.
-        if (m_sketch_tab != nullptr && panel != m_sketch_tab && panel != m_modeling_tab) {
+        if (m_sketch_tab != nullptr && panel != m_sketch_tab && panel != m_modeling_tab && panel != m_cam_tab) {
             m_sketch_tab->hide_workspace();
             if (DesignPanel* design = DesignPanel::if_built())
                 design->on_tab_hidden();
@@ -1421,11 +1423,14 @@ void MainFrame::init_tabpanel() {
     m_cad_workspace = std::make_unique<CadWorkspace>();
     m_sketch_tab    = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Sketch);
     m_modeling_tab  = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Modeling);
+    m_cam_tab       = new CadTabPage(this, *m_cad_workspace, DesignPanel::WorkspaceTab::Cam);
     // A mode change inside the workspace (starting or finishing a sketch) asks for the tab it
     // belongs to. Queued: it fires from inside the panel's own event handlers.
     DesignPanel::when_built([this](DesignPanel& design) {
         design.set_on_request_workspace_tab([this](DesignPanel::WorkspaceTab tab) {
-            request_select_tab(tab == DesignPanel::WorkspaceTab::Sketch ? TAB_ID_SKETCH : TAB_ID_MODELING);
+            request_select_tab(tab == DesignPanel::WorkspaceTab::Sketch ? TAB_ID_SKETCH
+                               : tab == DesignPanel::WorkspaceTab::Cam  ? TAB_ID_CAM
+                                                                         : TAB_ID_MODELING);
         });
     });
     start_mcp_control_if_enabled();   // opens the MCP socket iff ORCA_CAD_MCP is set

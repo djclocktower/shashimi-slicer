@@ -43,10 +43,11 @@
 // names rather than positional indices so optional pages cannot shift them.
 #define TAB_ID_HOME          "home"
 #ifdef SLIC3R_CAD
-// The two CAD tabs show one shared workspace (CadTabPage). TAB_ID_DESIGN is the id of the
+// The three CAD tabs (Sketch, Modeling, CAM) show one shared workspace (CadTabPage). TAB_ID_DESIGN is the id of the
 // single Design tab they replaced; no page uses it any more.
 #define TAB_ID_SKETCH        "sketch"
 #define TAB_ID_MODELING      "modeling"
+#define TAB_ID_CAM           "cam"
 #define TAB_ID_DESIGN        "design"
 #endif
 #define TAB_ID_PREPARE       "prepare"
@@ -465,6 +466,7 @@ public:
     std::unique_ptr<CadWorkspace> m_cad_workspace;
     CadTabPage* m_sketch_tab { nullptr };
     CadTabPage* m_modeling_tab { nullptr };
+    CadTabPage* m_cam_tab { nullptr };
 #endif
     //BBS: GUI refactor
     LazyPage<MonitorPanel>* m_monitor_page{ nullptr };

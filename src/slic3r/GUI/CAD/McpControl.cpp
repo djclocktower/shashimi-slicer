@@ -2087,6 +2087,8 @@ std::string handle_on_main(const std::string& method, const json& params, const 
         if (method == "surface_fill")    return rpc_result(id, action_surface_fill(panel, params));
         if (method == "mate")          return rpc_result(id, action_mate(panel, params));
         if (method == "check_interference") return rpc_result(id, action_check_interference(panel, params));
+        if (method.rfind("cam_", 0) == 0 && panel->cam_ui() != nullptr)
+            return rpc_result(id, panel->cam_ui()->mcp(method, params));
         return rpc_error(id, -32601, "Unknown method: " + method);
     } catch (const Standard_Failure& ex) {   // OCCT errors are NOT std::exception
         return rpc_error(id, -32000, std::string("OCCT: ") + (ex.GetMessageString() ? ex.GetMessageString() : "failure"));

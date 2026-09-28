@@ -62,7 +62,14 @@ if (SLIC3R_CAD)
         test_sketchinference.cpp
         test_slvs_constraints.cpp
         test_sketchdimension.cpp
-        test_cam_adaptive.cpp)
+        test_cam_adaptive.cpp
+        test_cam_3d.cpp
+        test_cam_rotary.cpp
+        test_cam_sim.cpp
+        test_cam_document.cpp
+        test_cam_2d.cpp
+        test_cam_drill.cpp
+        test_cam_post.cpp)
 endif ()
 
 if (TARGET OpenVDB::openvdb)

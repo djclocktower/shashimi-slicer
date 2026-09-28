@@ -179,6 +179,7 @@ const std::string ORCA_CAD_RECIPE_FILE = "Metadata/orca_cad.bin";
 // Read-only: the recipe entry's pre-rename name. A reader that knows only the new one drops the
 // feature tree of every project written before the move, without a word. Never written.
 const std::string LEGACY_CAD_RECIPE_FILE = "Metadata/SnapOrca_cad.bin";
+const std::string SHASHIMI_CAM_RECIPE_FILE = "Metadata/shashimi_cam.bin";
 const std::string LAYER_CONFIG_RANGES_FILE = "Metadata/layer_config_ranges.xml";
 const std::string BRIM_EAR_POINTS_FILE = "Metadata/brim_ear_points.txt";
 /*const std::string SLA_SUPPORT_POINTS_FILE = "Metadata/Slic3r_PE_sla_support_points.txt";
@@ -1961,6 +1962,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         std::string buf((size_t)stat.m_uncomp_size, '\0');
                         if (mz_zip_reader_extract_to_mem(&archive, stat.m_file_index, buf.data(), buf.size(), 0))
                             model.cad_recipe = std::move(buf);
+                    }
+                }
+                else if (boost::algorithm::iequals(name, SHASHIMI_CAM_RECIPE_FILE)) {
+                    // Restore the CAM recipe (optional; absent in projects without CAM).
+                    if (stat.m_uncomp_size > 0) {
+                        std::string buf((size_t)stat.m_uncomp_size, '\0');
+                        if (mz_zip_reader_extract_to_mem(&archive, stat.m_file_index, buf.data(), buf.size(), 0))
+                            model.cam_recipe = std::move(buf);
                     }
                 }
                 else if (boost::algorithm::iequals(name, CUT_INFORMATION_FILE)) {
@@ -6022,6 +6031,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool _add_build_to_model_stream(std::stringstream& stream, const BuildItemsList& build_items) const;
         bool _add_layer_height_profile_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_cad_recipe_file_to_archive(mz_zip_archive& archive, Model& model);
+        bool _add_cam_recipe_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_layer_config_ranges_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_brim_ear_points_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_sla_support_points_file_to_archive(mz_zip_archive& archive, Model& model);
@@ -6419,6 +6429,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             }
 
             if (!_add_cad_recipe_file_to_archive(archive, model)) {
+                close_zip_writer(&archive);
+                return false;
+            }
+
+            if (!_add_cam_recipe_file_to_archive(archive, model)) {
                 close_zip_writer(&archive);
                 return false;
             }
@@ -7685,6 +7700,19 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 (const void*)model.cad_recipe.data(), model.cad_recipe.length(),
                 MZ_DEFAULT_COMPRESSION)) {
             add_error("Unable to add CAD recipe file to archive");
+            return false;
+        }
+        return true;
+    }
+
+    bool _BBS_3MF_Exporter::_add_cam_recipe_file_to_archive(mz_zip_archive& archive, Model& model)
+    {
+        if (model.cam_recipe.empty())
+            return true;
+        if (!mz_zip_writer_add_mem(&archive, SHASHIMI_CAM_RECIPE_FILE.c_str(),
+                (const void*)model.cam_recipe.data(), model.cam_recipe.length(),
+                MZ_DEFAULT_COMPRESSION)) {
+            add_error("Unable to add CAM recipe file to archive");
             return false;
         }
         return true;

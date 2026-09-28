@@ -9058,6 +9058,8 @@ void DesignSketchTool::render(GLCanvas3D& canvas)
     m_rubber.render(canvas); // left-drag rubber band (no-op unless one is being swept). Drawn
                              // here, ahead of every early return below, so a band over an empty
                              // plate is still visible.
+    if (overlay_on && on_render_overlay)
+        on_render_overlay();
     if (m_active && m_mode != Mode::Constrain && m_entities.empty() && m_points.empty()
         && m_display_sketches.empty()) {
         if (on_readout) on_readout(std::string());
