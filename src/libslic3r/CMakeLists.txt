@@ -538,6 +538,42 @@ if (SLIC3R_CAD)
         )
 endif ()
 
+# CAM kernel (Slic3r::CAM): setups, operations, toolpaths, simulation, post. Uses the CAD
+# kernel's OCCT for geometry, so it builds only with SLIC3R_CAD.
+if (SLIC3R_CAD)
+    list(APPEND lisbslic3r_sources
+            CAM/CamTypes.hpp
+            CAM/CamDocument.cpp
+            CAM/CamDocument.hpp
+            CAM/CamGeometry.cpp
+            CAM/CamGeometry.hpp
+            CAM/Adaptive.cpp
+            CAM/Adaptive.hpp
+            CAM/Op2D.cpp
+            CAM/Op2D.hpp
+            CAM/Drill.cpp
+            CAM/Drill.hpp
+            CAM/Op3D.cpp
+            CAM/Op3D.hpp
+            CAM/Rotary.cpp
+            CAM/Rotary.hpp
+            CAM/StockSim.cpp
+            CAM/StockSim.hpp
+            CAM/FeedsSpeeds.cpp
+            CAM/FeedsSpeeds.hpp
+            CAM/ToolLibrary.cpp
+            CAM/ToolLibrary.hpp
+            CAM/Machines.cpp
+            CAM/Machines.hpp
+            CAM/Post.cpp
+            CAM/Post.hpp
+            CAM/Toolpath.cpp
+            CAM/Toolpath.hpp
+            CAM/CAM.cpp
+            CAM/CAM.hpp
+        )
+endif ()
+
 if (APPLE)
     list(APPEND lisbslic3r_sources
             MacUtils.mm
