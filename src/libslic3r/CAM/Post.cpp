@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <set>
 #include <sstream>
 
@@ -136,21 +137,34 @@ public:
         return "A" + num(shown, 3);
     }
 
-    void index_a(double a)
+    // Turns A to `a`, first lifting Z to `safe_z` so the part never turns into the tool.
+    void index_a(double a, double safe_z)
     {
         const std::string w = a_word(a);
         if (!w.empty()) {
             end_cycle();
             set_inverse(false);
+            line("G0 " + len('Z', safe_z));
             line("G0 " + w);
             m_g = 0;
         }
     }
 
-    // One linear or arc (ij != null) motion.
-    void motion(int g, const Vec3d& to, double a, double feed, const Vec2d* ij, double length_mm)
+    // One linear or arc (ij != null) motion. `feed` is the surface feed over `length_mm`;
+    // `combined` (output units, A in degrees) is what a control without inverse time meters for a
+    // move that turns A.
+    void motion(int g, const Vec3d& to, double a, double feed, const Vec2d* ij, double length_mm, double combined = 0)
     {
         end_cycle();
+        if (!m_known && g == 0) {
+            // Position unknown (program start, after a tool change or setup change): Z first, then
+            // XY, so a tool left low (touch-off, manual change) never rapids diagonally into the work.
+            set_inverse(false);
+            line("G0 " + len('Z', to.z()));
+            m_g     = 0;
+            m_known = true;
+            m_pos   = Vec3d(std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), to.z());
+        }
         std::string w;
         for (int k = 0; k < 3; ++k)
             if (!m_known || std::abs(to[k] - m_pos[k]) * m_unit >= 0.5 * std::pow(10., -m_dec) || (ij && k < 2))
@@ -168,9 +182,14 @@ public:
         if (g != 0) {
             if (inverse)
                 s += " F" + num(feed / std::max(1e-6, length_mm), 3);
-            else if (std::abs(feed - m_f) > 1e-6) {
-                s += " " + feed_word(feed);
-                m_f = feed;
+            else {
+                // Keep the surface speed: a pure A move is metered in deg/min, a mixed one over
+                // sqrt(dXYZ^2 + dA^2).
+                const double f = !aw.empty() && combined > 0 && length_mm > 1e-9 ? feed * combined / (length_mm * m_unit) : feed;
+                if (std::abs(f - m_f) > 1e-6) {
+                    s += " " + feed_word(f);
+                    m_f = f;
+                }
             }
         }
         line(s);
@@ -187,7 +206,9 @@ public:
             return;
         }
         if (!is_arc(m) || std::abs(m.a_deg - from_a) > 1e-9) {
-            motion(1, m.to, m.a_deg, m.feed, nullptr, move_length(from, from_a, m));
+            double da = std::abs(std::fmod(m.a_deg - from_a, 360.0));   // the short way, as a_word unwraps
+            if (da > 180) da = 360 - da;
+            motion(1, m.to, m.a_deg, m.feed, nullptr, move_length(from, from_a, m), std::hypot((m.to - from).norm() * m_unit, da));
             return;
         }
         if (!m_o.arcs) {
@@ -285,8 +306,18 @@ std::string post_process(const CamDocument& doc, const std::vector<int>& op_indi
             return fail("Operation \"" + op.name + "\" has no valid toolpath. Generate it first.");
         if (!doc.find_tool(op.tool_number))
             return fail("Operation \"" + op.name + "\" uses tool T" + std::to_string(op.tool_number) + ", which is not in the tool library.");
+        if (op.type == OpType::Drill && op.cycle == DrillCycle::Tap) {
+            if (!dialect_has_canned_cycles(d))
+                return fail("Tapping needs a control with synchronised tapping (LinuxCNC, Mach3, Fanuc).");
+            if (!(doc.find_tool(op.tool_number)->thread_pitch > 0))
+                return fail("Operation \"" + op.name + "\": the tap has no thread pitch. Set its pitch in the Tool Library.");
+        }
         if (op.setup_index < 0 || op.setup_index >= int(doc.setups.size()))
             return fail("Operation \"" + op.name + "\" belongs to a setup that does not exist.");
+        // "Xnan" would reach the machine as-is (or as X0 on a lenient control): refuse the post.
+        for (const Move& m : doc.paths[i].moves)
+            if (!m.to.allFinite() || !m.center.allFinite() || !std::isfinite(m.a_deg) || !std::isfinite(m.feed))
+                return fail("Operation \"" + op.name + "\" has an invalid coordinate in its toolpath. Regenerate it.");
         if (!machine.has_a_axis)
             for (const Move& m : doc.paths[i].moves)
                 if (std::abs(m.a_deg - doc.setups[op.setup_index].a_index_deg) > 1e-6)
@@ -360,7 +391,7 @@ std::string post_process(const CamDocument& doc, const std::vector<int>& op_indi
             if (d != PostDialect::Marlin)
                 w.line("G" + std::to_string(std::clamp(setup.work_offset, 54, 59)));
             if (machine.has_a_axis)
-                w.index_a(setup.a_index_deg);
+                w.index_a(setup.a_index_deg, tp.moves.front().to.z());   // the op's first rapid is at clearance
             cur_setup = op.setup_index;
             w.forget();
         }
@@ -414,8 +445,7 @@ std::string post_process(const CamDocument& doc, const std::vector<int>& op_indi
                 case DrillCycle::Tap: code = d == PostDialect::LinuxCNC ? "G33.1" : "G84"; break;
                 }
                 if (code == "G33.1") {
-                    const double pitch = tool.thread_pitch > 0 ? tool.thread_pitch : fs.chipload;
-                    w.line("G33.1 " + w.len('Z', bottom) + " " + w.len('K', pitch));
+                    w.line("G33.1 " + w.len('Z', bottom) + " " + w.len('K', tool.thread_pitch));
                     w.forget();
                 } else
                     w.canned(code, m.to, bottom, r, extra, m.feed);
@@ -424,14 +454,10 @@ std::string post_process(const CamDocument& doc, const std::vector<int>& op_indi
                 i = j - 1;
                 continue;
             }
-            // Expanded tapping: reverse the spindle to back out.
-            const bool tap_out = m.cycle >= 0 && op.cycle == DrillCycle::Tap && m.kind == K::Feed && m.to.z() > pos.z();
-            if (tap_out) w.line("M4 S" + w.num(std::round(fs.rpm), 0));
             if (i == 0)
                 w.motion(0, m.to, m.a_deg, 0, nullptr, 0);
             else
                 w.emit_move(pos, pos_a, m);
-            if (tap_out) w.line("M3 S" + w.num(std::round(fs.rpm), 0));
             // Expanded dwell at the bottom of a drill cycle.
             if (m.cycle >= 0 && op.dwell_s > 0 && (m.kind == K::Plunge) &&
                 (i + 1 >= tp.moves.size() || tp.moves[i + 1].to.z() > m.to.z()))

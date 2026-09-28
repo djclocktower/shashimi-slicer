@@ -83,9 +83,9 @@ TEST_CASE("Wrapping a line 2 pi r long turns A through 360 degrees", "[CamRotary
         REQUIRE(m.to.x() == Catch::Approx(10));
         a_max = std::max(a_max, m.a_deg);
         a_min = std::min(a_min, tp.moves[k - 1].a_deg);
-        // pure A move: the programmed feed (deg/min) makes the surface speed 600 mm/min at r
-        if (std::abs(m.a_deg - tp.moves[k - 1].a_deg) > 1)
-            REQUIRE(m.feed * M_PI / 180. * r == Catch::Approx(600));
+        // Move::feed is the surface feed; the post converts A moves (deg/min) for the control
+        REQUIRE(m.feed == Catch::Approx(600));
+        REQUIRE(std::abs(m.a_deg - tp.moves[k - 1].a_deg) <= 90 + 1e-9);   // split: the post unwraps the short way
     }
     REQUIRE(feeds >= 1);
     REQUIRE(a_min == Catch::Approx(0).margin(1e-9));

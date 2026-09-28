@@ -31,6 +31,8 @@ edit and tell the other two owners.
   - Generators start with a Rapid at clearance, link with `append_link_move`, and finish with
     `append_retract`.
   - Rapids never pass through stock.
+  - `Move::feed` is the surface feed in mm/min, also on moves that turn A. The post converts it for the
+    control (inverse time, or deg/min-style metering). One move turns A by at most 180 degrees.
   - Arcs lie in the XY plane. Test for an arc with `is_arc()` / `arc_dir()`, not with `Kind`, because lead
     and ramp moves can also be arcs.
 - **Errors.** Errors and warnings are plain-language sentences for the user, stored in `Toolpath::error` /

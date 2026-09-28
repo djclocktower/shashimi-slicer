@@ -209,6 +209,10 @@ Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const Ca
     }
     if (op.type == OpType::Drill && op.cycle == DrillCycle::Tap && tool->type != ToolType::Tap)
         tp.warnings.push_back({-1, Vec3d::Zero(), "The tapping cycle is used with a tool that is not a tap."});
+    if (op.type == OpType::Drill && op.cycle == DrillCycle::Tap && !(tool->thread_pitch > 0)) {
+        tp.error = "The tap has no thread pitch. Set its pitch in the Tool Library.";
+        return tp;
+    }
 
     const bool   is_drill = tool->type == ToolType::Drill;
     // Cone length of the drill point (118 deg: 0.3 d), added to through holes.
@@ -306,8 +310,7 @@ Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const Ca
             add(tp, K::Feed, Vec3d(x, y, R), feed, c);
             break;
         case DrillCycle::Tap: {  // G84: feed = rpm * pitch in, spindle reverse, same feed out
-            const double pitch = tool->thread_pitch > 0 ? tool->thread_pitch : fs.chipload;
-            const double tf    = fs.rpm * pitch;
+            const double tf = fs.rpm * tool->thread_pitch;   // pitch checked above
             add(tp, K::Plunge, Vec3d(x, y, bottom), tf, c);
             add(tp, K::Feed, Vec3d(x, y, R), tf, c);
             break;

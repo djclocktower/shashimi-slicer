@@ -175,6 +175,16 @@ TEST_CASE("Drill cycles produce the expected Z sequence", "[CamDrill]")
         for (const Move& m : tp.moves)
             if (m.cycle >= 0) REQUIRE_THAT(m.feed, WithinAbs(fs.rpm * 1.25, 1e-6));
     }
+    SECTION("tap without a thread pitch is an error, never a guessed pitch") {
+        CamTool tap;
+        tap.type = ToolType::Tap; tap.diameter = 8; tap.thread_pitch = 0;
+        f.doc.tools[0] = tap;
+        f.doc.tools[0].number = 1;
+        f.op().cycle = DrillCycle::Tap;
+        const Toolpath tp = generate_toolpath(f.doc, 0, f.model);
+        REQUIRE_FALSE(tp.ok());
+        REQUIRE(tp.error.find("thread pitch") != std::string::npos);
+    }
     SECTION("a through hole gets the break-through and the drill point") {
         Fixture t(plate_with_hole(true), drill(8));
         t.op().cycle = DrillCycle::Drill;

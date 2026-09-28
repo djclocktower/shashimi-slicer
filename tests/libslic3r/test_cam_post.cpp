@@ -180,6 +180,7 @@ TEST_CASE("A axis words are unwrapped, optionally modulo, with inverse time", "[
     std::string g = post_process(doc, {0}, o);
     INFO(g);
     REQUIRE(has(g, "G0 A350"));    // the setup's index position
+    REQUIRE(has(g, "G0 Z20\nG0 A350"));   // Z up to the op's clearance before the part turns
     REQUIRE(has(g, "A370"));       // 350 -> 10 is +20 deg, not -340
     REQUIRE(count_lines(g, "(^| )A10( |$)") == 0);
     // inverse time: 20 deg at r = 10 is 3.49 mm at 500 mm/min -> F = 143.2 (1/min)
@@ -192,11 +193,47 @@ TEST_CASE("A axis words are unwrapped, optionally modulo, with inverse time", "[
     g = post_process(doc, {0}, o);
     REQUIRE(count_lines(g, "(^| )A10( |$)") == 1);
     REQUIRE_FALSE(has(g, "G93"));
+    // without inverse time a pure A move is metered in deg/min: 500 mm/min at r = 10 is 2864.8 deg/min
+    REQUIRE(has(g, "A10 F2864.8"));
 
     // a 3-axis machine refuses A motion
     std::string err;
     REQUIRE(post_process(doc, {0}, options("Generic 3-axis"), &err).empty());
     REQUIRE(has(err, "A axis"));
+}
+
+TEST_CASE("A turns between setups only after Z is up", "[CamPost]")
+{
+    CamDocument doc = sample();
+    CamSetup    s2;
+    s2.name        = "Setup2";
+    s2.a_index_deg = 90;
+    doc.add_setup(s2);
+    doc.operations[1].setup_index = 1;
+    for (Move& m : doc.paths[1].moves) m.a_deg = 90;   // as generate_toolpath stamps an indexed setup
+    const std::string g = post_process(doc, {0, 1}, options("Generic 4-axis (A about X)"));
+    INFO(g);
+    REQUIRE(has(g, "G0 Z10\nG0 A90"));   // Drill1's first rapid is at Z10
+}
+
+TEST_CASE("Tapping needs a synchronised control and a thread pitch", "[CamPost]")
+{
+    CamDocument doc = sample();
+    doc.operations[1].cycle = DrillCycle::Tap;
+    doc.tools[1].type       = ToolType::Tap;
+    std::string err;
+    for (const char* m : {"GRBL router (Shapeoko/X-Carve class)", "Generic 3-axis"}) {
+        REQUIRE(post_process(doc, {0, 1}, options(m), &err).empty());
+        REQUIRE(has(err, "synchronised tapping"));
+    }
+    doc.tools[1].thread_pitch = 0;
+    REQUIRE(post_process(doc, {0, 1}, options("LinuxCNC mill"), &err).empty());
+    REQUIRE(has(err, "thread pitch"));
+    doc.tools[1].thread_pitch = 0.8;
+    const std::string g = post_process(doc, {0, 1}, options("LinuxCNC mill"), &err);
+    INFO(g);
+    REQUIRE(err.empty());
+    REQUIRE(has(g, "G33.1 Z-4 K0.8"));
 }
 
 TEST_CASE("Post refuses operations without a toolpath", "[CamPost]")

@@ -23,6 +23,7 @@
 
 #include <GL/glew.h>
 #include <boost/filesystem/path.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <Standard_Failure.hxx>
 #include <TopoDS.hxx>
 #include <nlohmann/json.hpp>
@@ -317,6 +318,9 @@ struct CamController::Impl
     CamModel         model;
     bool             model_dirty{true};
     uint64_t         model_gen{UINT64_MAX};
+    // A regenerate() is running: its worker reads doc and model while the progress loop pumps
+    // events, so nothing that arrives through that loop (MCP calls) may touch them.
+    bool             generating{false};
 
     std::vector<MachineProfile> machines;
     std::vector<CamTool>        library;
@@ -588,6 +592,10 @@ CamController::Impl::Impl(DesignPanel& panel) : p(panel), doc(panel.m_cam)
 CamController::Impl::~Impl()
 {
     sim_timer.Stop();
+    // The tree outlives this (wx destroys it with the panel), and emptying it can send selection
+    // events (MSW): empty it now, while its handlers still have an Impl to ignore them with.
+    rebuilding = true;
+    if (tree) tree->DeleteAllItems();
     if (p.m_viewport) {
         p.m_viewport->mcp_sketch_tool().on_render_overlay = nullptr;
         p.m_viewport->mcp_sketch_tool().overlay_on        = false;
@@ -1682,6 +1690,7 @@ void CamController::Impl::close_page()
 bool CamController::Impl::regenerate(const std::vector<int>& ops, const wxString& what)
 {
     if (ops.empty()) return true;
+    if (generating) return false;   // re-entered from the progress loop's event pump
     if (!ensure_model()) return false;
     try { update_setup_frames(model, doc); } catch (...) {}
     ops_resized();
@@ -1692,6 +1701,7 @@ bool CamController::Impl::regenerate(const std::vector<int>& ops, const wxString
     std::vector<std::pair<int, Toolpath>> results;
     std::atomic<double> fraction{0};
     std::atomic<bool>   cancel{false}, done{false};
+    generating = true;
     std::thread worker([&] {
         for (size_t k = 0; k < ops.size() && !cancel; ++k) {
             const int i = ops[k];
@@ -1731,6 +1741,7 @@ bool CamController::Impl::regenerate(const std::vector<int>& ops, const wxString
         }
     }
     worker.join();
+    generating = false;
 
     bool all_ok = true;
     std::vector<int> repick;
@@ -2127,7 +2138,7 @@ void CamController::Impl::post_dialog(const PostPreset* pre)
         if (!make()) return;
         wxString path = t_path->GetValue();
         if (path.empty()) return;
-        std::ofstream f(path.ToUTF8().data(), std::ios::binary);
+        boost::nowide::ofstream f(path.ToUTF8().data(), std::ios::binary);   // UTF-8 path on Windows too
         f << last;
         f.close();
         if (!f) { info->SetLabel(_L("Could not write ") + path); return; }
@@ -2558,17 +2569,19 @@ void CamController::Impl::sim_open()
     for (int i : ops) {
         const Toolpath& tp = doc.paths[i];
         if (!tp.ok() || tp.moves.empty()) continue;
-        Vec3d pos = sim.empty() ? tp.moves.front().to : sim.back().m.to;
+        Vec3d  pos   = sim.empty() ? tp.moves.front().to : sim.back().m.to;
+        double pos_a = sim.empty() ? tp.moves.front().a_deg : sim.back().m.a_deg;
         size_t k0 = sim.empty() ? 1 : 0;
         for (size_t k = k0; k < tp.moves.size(); ++k) {
             const Move& mv = tp.moves[k];
             const bool rapid = mv.kind == Move::Kind::Rapid || mv.kind == Move::Kind::Retract;
             const double feed = rapid ? std::max(1.0, mach.rapid_feed) : (mv.feed > 0 ? mv.feed : std::max(1.0, mach.max_feed_xy));
-            double dt = move_length(pos, mv) / feed * 60.0;
+            double dt = CAM::move_length(pos, pos_a, mv) / feed * 60.0;   // A turns take time too
             dt = std::max(dt, 1e-4);
             sim.push_back({i, pos, mv, t, t + dt});
             t += dt;
-            pos = mv.to;
+            pos   = mv.to;
+            pos_a = mv.a_deg;
         }
     }
     if (sim.empty()) { status(_L("No valid toolpath to simulate (see the operation's error)."), true); return; }
@@ -2726,6 +2739,7 @@ wxWindow* CamController::tree_page() const { return m->tree_panel; }
 wxWindow* CamController::pm_page() const { return m->pm; }
 wxWindow* CamController::sim_bar() const { return m->simbar; }
 bool      CamController::pm_active() const { return m->page != Impl::Page::None; }
+bool      CamController::busy() const { return m->generating; }
 void      CamController::show_pm(bool pm) { m->show_pm_page(pm); }
 
 void CamController::build_ribbon(CadRibbon& r)

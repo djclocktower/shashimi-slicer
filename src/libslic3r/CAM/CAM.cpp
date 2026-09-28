@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <mutex>
 
 namespace Slic3r::CAM {
@@ -42,6 +43,18 @@ Toolpath generate_toolpath(const CamDocument& doc, int op_index, const CamModel&
         tp.error = "The operation's tool (T" + std::to_string(op.tool_number) + ") is not in the tool library.";
         return tp;
     }
+    // One gate for every generator: a zero/NaN tool or pass size divides by zero somewhere below
+    // (a corrupt project or a scripted edit can carry either).
+    if (!(tool->diameter > 0) || !std::isfinite(tool->diameter)) {
+        tp.error = "Tool T" + std::to_string(tool->number) + " has no diameter. Set its diameter in the Tool Library.";
+        return tp;
+    }
+    for (double v : {op.stepover, op.stepdown, op.tolerance, op.optimal_load, op.a_stepover_deg, op.peck_depth,
+                     op.stock_to_leave_radial, op.stock_to_leave_axial, op.lead_in_radius, op.helix_diameter})
+        if (!std::isfinite(v)) {
+            tp.error = "One of this operation's values is not a number. Open the operation and re-enter its values.";
+            return tp;
+        }
 
     // Generators may report from worker threads: serialise the callback, keep the fraction
     // monotonic, and remember a cancel so every later call answers "cancel" at once.

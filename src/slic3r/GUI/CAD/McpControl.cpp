@@ -1995,6 +1995,10 @@ std::string handle_on_main(const std::string& method, const json& params, const 
     DesignPanel* panel = DesignPanel::ensure();
     if (!panel)
         return rpc_error(id, -32001, "Design panel not ready");
+    // A CAM calculation pumps events while its worker reads the documents: refuse everything
+    // until it finishes rather than mutate them under it.
+    if (panel->cam_ui() != nullptr && panel->cam_ui()->busy())
+        return rpc_error(id, -32002, "CAM is generating toolpaths; try again when it finishes");
 
     // Stale-id guard, checked here rather than in each handler.
     //

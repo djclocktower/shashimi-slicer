@@ -8,10 +8,18 @@ printed without leaving the application.
   dimensions solved as you draw.
 - **Modeling** tab: a feature history (extrude, revolve, sweep, loft, fillet, chamfer, shell,
   patterns, booleans and more) that rebuilds when a dimension changes.
-- Both tabs work on the same document and viewport. **Prepare**, **Preview** and the rest of
+- The CAD tabs work on the same document and viewport. **Prepare**, **Preview** and the rest of
   OrcaSlicer's slicing workflow are unchanged, and a design is committed to the plate as ordinary
   objects. The design is saved inside the project's 3MF.
-- Planned: toolpaths for hobby CNC machines.
+
+**CAM** tab: toolpaths for hobby CNC mills and routers, made from the same model. A Setup picks
+the machine, material, stock and work origin; operations (facing, adaptive clearing, pocket,
+contour, slot, drilling and boring, chamfer, engrave; 3D adaptive roughing, parallel and Z-level
+finishing; 4-axis wrapping, rotary finishing and indexed setups) get feeds and speeds filled in
+from the tool and material. Toolpaths can be simulated with material removal, and Post Process
+writes G-code for GRBL, LinuxCNC, Mach3/Mach4, Fanuc-style controls or Marlin. The CAM setups are
+saved in the project's 3MF next to the design. Check every program in simulation and on the
+machine with care before cutting: the CAM tab is new.
 
 ## Credits
 
@@ -24,6 +32,8 @@ Shashimi Slicer builds on the work of:
   Alessandro Ranellucci and the RepRap community
 - [SolveSpace](https://solvespace.com/) for the geometric constraint solver
 - [Open CASCADE Technology](https://dev.opencascade.org/) (OCCT) for the B-rep modeling kernel
+- [FreeCAD](https://www.freecad.org/)'s CAM workbench, whose adaptive clearing algorithm
+  (libarea, LGPL) the CAM tab's adaptive operations are ported from
 
 ## License
 

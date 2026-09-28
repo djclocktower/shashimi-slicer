@@ -44,6 +44,7 @@ public:
     void on_sketch_pick(int feature);
     bool on_key(wxKeyEvent& e);                               // true = handled
     bool pm_active() const;
+    bool busy() const;                                        // toolpaths are being generated (worker running)
     void show_pm(bool pm);                                    // left pane: CAM tree <-> PropertyManager
 
     // Persistence (Model::cam_recipe).

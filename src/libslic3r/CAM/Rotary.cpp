@@ -20,23 +20,6 @@ Transform3d apply_index(const Transform3d& frame, double a_deg)
     return Transform3d(Eigen::AngleAxisd(a_deg * M_PI / 180., Vec3d::UnitX())) * frame;
 }
 
-namespace {
-
-// Feed for a move with an A component, so the surface speed at `radius` equals `feed`: the
-// controller (without inverse time) meters sqrt(dx^2 + dy^2 + dz^2 + dA^2) with A in degrees.
-double rotary_feed(double feed, const Move& from, const Move& to, double radius)
-{
-    const double da = to.a_deg - from.a_deg;
-    if (std::abs(da) < 1e-9)
-        return feed;
-    const double lin2 = (to.to - from.to).squaredNorm();
-    const double ls   = std::sqrt(lin2 + std::pow(da * M_PI / 180. * radius, 2));
-    const double lc   = std::sqrt(lin2 + da * da);
-    return ls > 1e-9 ? feed * lc / ls : feed;
-}
-
-} // namespace
-
 Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath            tp;
@@ -86,36 +69,33 @@ Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, co
         return tp;
     }
     tp.warnings = flat.warnings;
-    // XY arcs have no meaning once Y becomes A: linearise them.
+    // XY arcs have no meaning once Y becomes A: linearise them. Long moves are split too: the post
+    // unwraps A the short way round, so one move may not turn more than 180 deg (90 here).
+    const double max_dy = 0.5 * M_PI * r;
     for (const Move& m : flat.moves) {
-        if (!is_arc(m) || tp.moves.empty()) {
+        if (tp.moves.empty()) {
             tp.moves.push_back(m);
             continue;
         }
         const Vec3d from = tp.moves.back().to;
-        for (const Vec3d& p : arc_points(from, m, std::max(op.tolerance, 0.001))) {
-            Move l = m;
-            l.kind = m.kind == Move::Kind::ArcCW || m.kind == Move::Kind::ArcCCW ? Move::Kind::Feed : m.kind;
-            l.arc  = ArcDir::None;
-            l.to   = p;
-            tp.moves.push_back(l);
+        for (const Vec3d& p : is_arc(m) ? arc_points(from, m, std::max(op.tolerance, 0.001)) : std::vector<Vec3d>{m.to}) {
+            const Vec3d a = tp.moves.back().to;
+            const int   n = std::max(1, int(std::ceil(std::abs(p.y() - a.y()) / max_dy)));
+            for (int k = 1; k <= n; ++k) {
+                Move l = m;
+                l.kind = m.kind == Move::Kind::ArcCW || m.kind == Move::Kind::ArcCCW ? Move::Kind::Feed : m.kind;
+                l.arc  = ArcDir::None;
+                l.to   = k == n ? p : Vec3d(a + (p - a) * (double(k) / n));
+                tp.moves.push_back(l);
+            }
         }
     }
 
     // Wrap: Y (arc length at r) -> A; the tool stays over the axis (Y = 0), Z is the tip radius.
-    Move prev;
-    for (size_t i = 0; i < tp.moves.size(); ++i) {
-        Move& m   = tp.moves[i];
-        m.a_deg   = wrap_y_to_a_deg(m.to.y(), r);
-        const double unrolled_len = i > 0 ? (m.to - prev.to).norm() : 0.;
-        const Move   unrolled     = m;
-        m.to.y()  = 0;
-        if (i > 0 && m.kind != K::Rapid && unrolled_len > 1e-9) {
-            const double da   = m.a_deg - tp.moves[i - 1].a_deg;
-            const double lin2 = (m.to - tp.moves[i - 1].to).squaredNorm();
-            m.feed            = m.feed * std::sqrt(lin2 + da * da) / unrolled_len;
-        }
-        prev = unrolled;
+    // Feeds stay surface mm/min (Move::feed); the post converts them for the controller.
+    for (Move& m : tp.moves) {
+        m.a_deg  = wrap_y_to_a_deg(m.to.y(), r);
+        m.to.y() = 0;
     }
     return tp;
 }
@@ -173,7 +153,7 @@ Toolpath generate_rotary_finish(const CamDocument& doc, const CamOperation& op, 
         m.kind  = kind;
         m.to    = to;
         m.a_deg = a;
-        m.feed  = tp.moves.empty() ? f : rotary_feed(f, tp.moves.back(), m, std::max(to.z(), 1.));
+        m.feed  = f;   // surface mm/min; the post converts A moves for the controller
         tp.moves.push_back(m);
     };
     const auto first_link = [&](const Vec3d& to, double a) {
