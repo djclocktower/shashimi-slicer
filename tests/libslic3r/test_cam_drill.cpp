@@ -192,6 +192,16 @@ TEST_CASE("Drill cycles produce the expected Z sequence", "[CamDrill]")
         const std::vector<double> zs = z_sequence(generate_toolpath(f.doc, 0, f.model));
         REQUIRE_THAT(zs[0], WithinAbs(-4.5, 1e-9));   // (8 / 2 + 0.5) / tan(45 deg)
     }
+    SECTION("the hole diameter filter") {
+        f.op().hole_diameter_min = 9;
+        REQUIRE(generate_toolpath(f.doc, 0, f.model).error.find("diameter filter") != std::string::npos);
+        f.op().hole_diameter_min = 0;
+        f.op().hole_diameter_max = 7;
+        REQUIRE(holes_for_op(f.doc, f.op(), f.model).empty());
+        f.op().hole_diameter_min = 7.9;
+        f.op().hole_diameter_max = 8.1;
+        REQUIRE(holes_for_op(f.doc, f.op(), f.model).size() == 1);
+    }
     SECTION("a drill larger than the hole is refused") {
         f.doc.tools[0].diameter = 10;
         const Toolpath tp = generate_toolpath(f.doc, 0, f.model);

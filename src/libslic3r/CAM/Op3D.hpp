@@ -24,8 +24,11 @@ struct HeightMap {
 HeightMap drop_cutter(const TriangleMesh& mesh, const CamTool& tool, const BoundingBox3Base<Vec3d>& box,
                       double resolution);
 
-Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, const CamModel& model);
-Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, const CamModel& model);
-Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, const CamModel& model);
+Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, const CamModel& model,
+                             const ProgressFn& progress = {});
+Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, const CamModel& model,
+                             const ProgressFn& progress = {});
+Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, const CamModel& model,
+                             const ProgressFn& progress = {});
 
 } // namespace Slic3r::CAM

@@ -29,6 +29,7 @@
 #include <cereal/types/vector.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -269,6 +270,10 @@ struct CamOperation {
     // Parallel3D / RotaryFinish: cut in both directions (zig-zag); false = every pass the same way.
     bool        bidirectional{true};
 
+    // Drill / Bore: only holes with this diameter range (0 = no limit); picked points always pass.
+    double      hole_diameter_min{0};
+    double      hole_diameter_max{0};
+
     template<class Archive> void serialize(Archive& ar)
     {
         ar(type, name, enabled, setup_index, tool_number, feeds_auto, feeds, geom, heights,
@@ -280,7 +285,7 @@ struct CamOperation {
            angle_deg, boundary,
            wrap_radius, a_stepover_deg, rotary_spiral, wrap_strategy,
            optimal_load, min_stepdown, lift_height, helix_angle_deg,
-           bidirectional);
+           bidirectional, hole_diameter_min, hole_diameter_max);
     }
 };
 
@@ -327,8 +332,14 @@ struct Toolpath {
     double               time_s{0};
     std::string          error;            // non-empty: generation failed; moves may be partial
     std::vector<Warning> warnings;
+    // CamDocument::model_generation this path was generated against (0 = never): see is_stale().
+    uint64_t             generation{0};
     bool ok() const { return error.empty(); }
 };
+
+// Generator progress: called with the fraction done (0..1), possibly from worker threads (the
+// callback generate_toolpath() passes down is serialised); returns true to cancel.
+using ProgressFn = std::function<bool(double fraction)>;
 
 // ---- Geometry handed to the generators ---------------------------------------------------------
 

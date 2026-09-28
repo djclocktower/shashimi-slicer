@@ -18,6 +18,7 @@ std::vector<HoleFeature> holes_for_op(const CamDocument& doc, const CamOperation
 // the selection; through holes add op.break_through + the drill point (118 deg: 0.3 d). A spot
 // drill on a recognised hole cuts a chamfer op.chamfer_width wider than the hole's radius.
 // OpType::Bore: helical bore of each hole (one op.stepdown per turn).
-Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const CamModel& model);
+Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const CamModel& model,
+                        const ProgressFn& progress = {});
 
 } // namespace Slic3r::CAM

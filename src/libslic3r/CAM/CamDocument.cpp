@@ -177,6 +177,17 @@ bool CamDocument::remove_tool(int index)
     return true;
 }
 
+void CamDocument::invalidate(int op_index)
+{
+    if (op_index >= 0 && op_index < int(paths.size()))
+        paths[op_index].generation = 0;
+}
+
+bool CamDocument::is_stale(int op_index) const
+{
+    return op_index < 0 || op_index >= int(paths.size()) || paths[op_index].generation != model_generation;
+}
+
 int CamDocument::add_setup(const CamSetup& setup)
 {
     setups.push_back(setup);
@@ -368,22 +379,34 @@ static Transform3d index_rotation(double a_deg, double y, double z)
 
 static double pick(double lo, double hi, int k) { return k == 0 ? lo : k == 1 ? 0.5 * (lo + hi) : hi; }
 
-CamSetupFrame compute_setup_frame(const CamSetup& setup, const CamModel& model)
+// Index axis (world Y, Z of the X line): the cylinder's axis, or the X line through the model
+// bounds' YZ centre.
+static Vec2d index_axis(const CamSetup& setup, const CamModel& model)
 {
-    CamSetupFrame frame;
-    const Stock&  st = setup.stock;
-
+    if (setup.stock.kind == StockKind::Cylinder && !setup.stock.axis_auto)
+        return setup.stock.axis_yz;
     BoundingBoxf3 world;
     for (const CamBody& b : model.bodies)
         if (setup_has_body(setup, b.body_id) && !b.mesh.empty())
             world.merge(b.mesh.bounding_box());
     if (!world.defined)
-        world = BoundingBoxf3(Vec3d::Zero(), Vec3d::Zero());
+        return Vec2d::Zero();
+    return Vec2d(0.5 * (world.min.y() + world.max.y()), 0.5 * (world.min.z() + world.max.z()));
+}
 
-    // Index axis: the cylinder's axis, or the X line through the model bounds' YZ centre.
-    const bool  cyl  = st.kind == StockKind::Cylinder;
-    const Vec2d axis = cyl && !st.axis_auto ? st.axis_yz : Vec2d(0.5 * (world.min.y() + world.max.y()), 0.5 * (world.min.z() + world.max.z()));
-    const Transform3d R = index_rotation(setup.a_index_deg, axis.x(), axis.y());
+Vec3d world_to_part_frame(const CamSetup& setup, const CamModel& model, const Vec3d& world)
+{
+    const Vec2d axis = index_axis(setup, model);
+    return index_rotation(setup.a_index_deg, axis.x(), axis.y()) * world;
+}
+
+CamSetupFrame compute_setup_frame(const CamSetup& setup, const CamModel& model)
+{
+    CamSetupFrame     frame;
+    const Stock&      st   = setup.stock;
+    const bool        cyl  = st.kind == StockKind::Cylinder;
+    const Vec2d       axis = index_axis(setup, model);
+    const Transform3d R    = index_rotation(setup.a_index_deg, axis.x(), axis.y());
 
     BoundingBoxf3 part;
     double        model_r = 0;

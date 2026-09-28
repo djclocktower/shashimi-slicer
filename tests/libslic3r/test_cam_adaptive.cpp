@@ -327,3 +327,71 @@ TEST_CASE("Adaptive clearing can be cancelled", "[CamAdaptive]")
     REQUIRE(res.error == "Cancelled.");
     REQUIRE(last >= 0);
 }
+
+TEST_CASE("Adaptive clearing with air outside is about as fast as a pocket", "[CamAdaptive]")
+{
+    // 3D level: 40 x 40 mm stock around a round model section, 6 mm tool at 10 % stepover.
+    const ExPolygons stock{ExPolygon(rect(0, 0, 40, 40))};
+    const ExPolygons model{ExPolygon(circle(20, 20, 8))};
+    const auto run = [&](bool air) {
+        A::Params p;
+        p.stepover_fraction = 0.1;
+        p.outside_is_air    = air;
+        const auto   t0     = std::chrono::steady_clock::now();
+        A::Result    res    = A::clear(stock, model, p);
+        const double t      = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        REQUIRE(res.ok);
+
+        // and it still clears the material
+        Raster ras(-10, -10, 50, 50, 0.25);
+        for (const A::Path& path : res.paths)
+            if (path.type == A::MotionType::Cutting)
+                for (size_t i = 1; i < path.pts.points.size(); ++i)
+                    ras.sweep(mm(path.pts.points[i - 1]), mm(path.pts.points[i]), p.tool_diameter / 2);
+        const ExPolygons target = diff_ex(stock, model);
+        size_t           total = 0, covered = 0;
+        for (int j = 0; j < ras.ny; ++j)
+            for (int i = 0; i < ras.nx; ++i) {
+                const Vec2d c = ras.center(i, j);
+                if (inside(target, Point::new_scale(c.x(), c.y()))) {
+                    ++total;
+                    covered += ras.cut[size_t(j) * ras.nx + i];
+                }
+            }
+        INFO((air ? "air" : "pocket") << " coverage " << double(covered) / total);
+        REQUIRE(double(covered) / total >= 0.97);
+
+        // and without overloading the tool: replay on a raster where only the stock is material
+        Raster mat(-10, -10, 50, 50, 0.1);
+        for (int j = 0; j < mat.ny; ++j)
+            for (int i = 0; i < mat.nx; ++i) {
+                const Vec2d c = mat.center(i, j);
+                mat.cut[size_t(j) * mat.nx + i] = !inside(stock, Point::new_scale(c.x(), c.y()));
+            }
+        double worst = 0, area = 0, len = 0;
+        for (const A::Entry& e : res.entries)
+            if ((mm(e.start) - mm(e.center)).norm() > 0)
+                mat.sweep(mm(e.center), mm(e.center), (mm(e.start) - mm(e.center)).norm() + p.tool_diameter / 2);
+        for (const A::Path& path : res.paths) {
+            if (path.type == A::MotionType::LinkNotClear)
+                continue;
+            area = len = 0;
+            for (size_t i = 1; i < path.pts.points.size(); ++i) {
+                const Vec2d a = mm(path.pts.points[i - 1]), b = mm(path.pts.points[i]);
+                area += mat.sweep(a, b, p.tool_diameter / 2);
+                len += (b - a).norm();
+                if (len >= 3.) {
+                    worst = std::max(worst, area / (len * p.stepover_fraction * p.tool_diameter));
+                    area = len = 0;
+                }
+            }
+        }
+        INFO((air ? "air" : "pocket") << " worst engagement " << worst);
+        REQUIRE(worst <= 1.3);
+        return t;
+    };
+    const double pocket = run(false);
+    const double air    = run(true);
+    WARN("adaptive 40x40 @10%: pocket " << pocket << " s, air " << air << " s");
+    REQUIRE(air < 3.0);
+}

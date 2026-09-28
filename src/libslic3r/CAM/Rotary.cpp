@@ -37,7 +37,7 @@ double rotary_feed(double feed, const Move& from, const Move& to, double radius)
 
 } // namespace
 
-Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath            tp;
     internal::OpContext ctx = internal::op_context(doc, op, model, false);
@@ -66,11 +66,11 @@ Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, co
     const CamTool&        tool = *ctx.tool;
     Toolpath              flat;
     switch (op.wrap_strategy) {
-    case OpType::Contour2D: flat = contour_region(regions, tool, op, ctx.fs, h); break;
+    case OpType::Contour2D: flat = contour_region(regions, tool, op, ctx.fs, h, progress); break;
     // ponytail: Adaptive2D wraps as a pocket (A's adaptive region builder is private to Op2D.cpp).
     case OpType::Pocket2D:
-    case OpType::Adaptive2D: flat = pocket_region(regions, tool, op, ctx.fs, h); break;
-    case OpType::Face: flat = face_region(regions, tool, op, ctx.fs, h); break;
+    case OpType::Adaptive2D: flat = pocket_region(regions, tool, op, ctx.fs, h, progress); break;
+    case OpType::Face: flat = face_region(regions, tool, op, ctx.fs, h, progress); break;
     default: { // Engrave, Trace, Slot, Chamfer2D: tool centre on the lines and profile outlines
         Polylines lines = chains;
         for (const Polygon& p : to_polygons(regions)) {
@@ -78,7 +78,7 @@ Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, co
             pl.points.push_back(p.points.front());
             lines.push_back(std::move(pl));
         }
-        flat = trace_chains(lines, tool, op, ctx.fs, h);
+        flat = trace_chains(lines, tool, op, ctx.fs, h, progress);
     }
     }
     if (!flat.ok()) {
@@ -120,7 +120,7 @@ Toolpath generate_rotary_wrap(const CamDocument& doc, const CamOperation& op, co
     return tp;
 }
 
-Toolpath generate_rotary_finish(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_rotary_finish(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath            tp;
     internal::OpContext ctx = internal::op_context(doc, op, model);
@@ -150,8 +150,11 @@ Toolpath generate_rotary_finish(const CamDocument& doc, const CamOperation& op, 
     // Radial drop-cutter: at A = a the part is rotated by a about X under the vertical tool at
     // Y = 0, so a plain drop-cutter over the rotated mesh along the X axis is exact.
     std::vector<std::vector<double>> zt(na, std::vector<double>(nx));
+    ProgressCounter pc(progress, size_t(na), 0, 0.95);
     tbb::parallel_for(tbb::blocked_range<int>(0, na, 4), [&](const tbb::blocked_range<int>& rg) {
         for (int k = rg.begin(); k < rg.end(); ++k) {
+            if (pc.step())
+                return;
             TriangleMesh m = ctx.mesh;
             m.transform(apply_index(Transform3d::Identity(), k * da));
             const internal::DropCutter dc(m.its, cutter);
@@ -159,6 +162,10 @@ Toolpath generate_rotary_finish(const CamDocument& doc, const CamOperation& op, 
                 zt[k][i] = dc.at(x0 + (x1 - x0) * i / (nx - 1), 0., floor - La) + La;
         }
     });
+    if (pc.cancelled()) {
+        tp.error = "Cancelled";
+        return tp;
+    }
     const auto xi = [&](int i) { return x0 + (x1 - x0) * i / (nx - 1); };
 
     const auto feed_move = [&](K kind, const Vec3d& to, double a, double f) {

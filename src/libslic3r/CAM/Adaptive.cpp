@@ -37,6 +37,9 @@
 //    10000-iteration limit remains).
 //  - Paths stay in integer algorithm units until the API boundary (the original round-tripped
 //    through doubles in mm).
+//  - Fix: CalcCutArea treated each cleared polygon separately, so the inside of a hole counted as
+//    cleared. Outside clearing (cleared = a ring around the stock) then saw no material at all and
+//    crawled along the stock edge for ~10000 failed engagements (~100x slower, half left uncut).
 //  - Conventional milling: the algorithm only produces climb cuts (CW spindle, material on the
 //    right of travel); conventional is produced by mirroring the input in X and mirroring back.
 
@@ -1268,13 +1271,18 @@ std::pair<double, double> Adaptive2d::CalcCutArea(IntPoint c1i, IntPoint c2i, Cl
         std::sort(ys.begin(), ys.end(), [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
 
         // 3.c) Loop over y-coordinates; init (y=-inf): outsideCount = 1 (outside c2, inside all others)
-        outside.assign(polygons.size() + 2, false);
-        outside[polygons.size()] = true; // poly_0, ..., poly_n-1, c2, c1
-        int outsideCount         = 1;
+        // The cleared polygons are one even-odd area (outer boundaries and holes), so they share
+        // one state slot: crossing any of their edges toggles it. (The original kept one slot
+        // per polygon, which counts the inside of a hole as cleared - with a cleared ring around
+        // the stock, as in outside clearing, no material was ever seen.) Slots: cleared, c2, c1.
+        outside.assign(3, false);
+        outside[1]       = true;
+        int outsideCount = 1;
         for (const auto& [_, ishape, ipart] : ys) {
-            const bool prevOutside = outside[ishape];
-            const int  prevCount   = outsideCount;
-            outside[ishape]        = !outside[ishape];
+            const size_t slot        = ishape < polygons.size() ? 0 : ishape - polygons.size() + 1;
+            const bool   prevOutside = outside[slot];
+            const int    prevCount   = outsideCount;
+            outside[slot]            = !outside[slot];
             outsideCount += prevOutside ? -1 : 1;
 
             // We compute integral(exitY - entranceY) as -integral(entranceY - 0) + integral(exitY - 0)

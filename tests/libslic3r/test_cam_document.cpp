@@ -43,6 +43,8 @@ CamDocument sample_doc()
     op.geom.points  = {Vec3d(1, 2, 3)};
     op.side         = ContourSide::Inside;
     op.heights.bottom = {HeightRef::Absolute, -4.5};
+    op.hole_diameter_min = 3;
+    op.hole_diameter_max = 8.5;
     doc.add_operation(op);
     return doc;
 }
@@ -70,6 +72,8 @@ TEST_CASE("CamDocument round-trips through its blob", "[CamDocument]")
     REQUIRE(back.operations[0].geom.faces[1].face == 7);
     REQUIRE(back.operations[0].geom.points[0] == Vec3d(1, 2, 3));
     REQUIRE(back.operations[0].heights.bottom.offset == -4.5);
+    REQUIRE(back.operations[0].hole_diameter_min == 3);
+    REQUIRE(back.operations[0].hole_diameter_max == 8.5);
     REQUIRE(back.paths.size() == 1);
     REQUIRE(back.warnings.empty());
     REQUIRE(back.serialize() == doc.serialize());
@@ -311,4 +315,73 @@ TEST_CASE("Feeds and speeds stay inside the machine and scale with the tool", "[
     op.feeds_auto = false;
     op.feeds.rpm  = 555;
     REQUIRE(effective_feeds(op, t, Material::MDF, big).rpm == 555);
+}
+
+TEST_CASE("Toolpaths go stale when the model or the operation changes", "[CamDocument]")
+{
+    CamDocument doc = sample_doc();
+    CamModel    model;
+    CamSketch   sk;
+    sk.feature = 1;
+    sk.regions = {ExPolygon(Polygon::new_scale({{0, 0}, {30, 0}, {30, 20}, {0, 20}}))};
+    model.sketches.push_back(sk);
+    doc.setups[0].stock.kind = StockKind::Box;
+    doc.setups[0].a_index_deg = 0;
+    doc.operations[0].geom = GeometrySelection{};
+    doc.operations[0].geom.sketch_feature = 1;
+    doc.operations[0].heights.bottom = {HeightRef::StockTop, -2};
+    doc.operations[0].stepdown = 0.5;   // 4 levels: 4 progress reports + the final 1
+    update_setup_frames(model, doc);
+
+    REQUIRE(doc.is_stale(0));
+    doc.paths[0] = generate_toolpath(doc, 0, model);
+    REQUIRE(doc.paths[0].ok());
+    REQUIRE_FALSE(doc.is_stale(0));
+    doc.mark_model_changed();
+    REQUIRE(doc.is_stale(0));
+    doc.paths[0] = generate_toolpath(doc, 0, model);
+    REQUIRE_FALSE(doc.is_stale(0));
+    doc.invalidate(0);
+    REQUIRE(doc.is_stale(0));
+    REQUIRE(doc.is_stale(7));
+
+    SECTION("progress is monotone and ends at 1; cancelling empties the result") {
+        std::vector<double> seen;
+        const Toolpath tp = generate_toolpath(doc, 0, model, [&](double f) { seen.push_back(f); return false; });
+        REQUIRE(tp.ok());
+        REQUIRE(seen.size() >= 2);
+        REQUIRE(std::is_sorted(seen.begin(), seen.end()));
+        REQUIRE(seen.back() == 1.0);
+        int calls = 0;
+        const Toolpath cancelled = generate_toolpath(doc, 0, model, [&](double) { return ++calls >= 2; });
+        REQUIRE(cancelled.error == "Cancelled");
+        REQUIRE(cancelled.moves.empty());
+        REQUIRE(calls == 2);
+    }
+    SECTION("adaptive and 3D generators honour cancel") {
+        doc.operations[0].type = OpType::Adaptive2D;
+        REQUIRE(generate_toolpath(doc, 0, model, [](double) { return true; }).error == "Cancelled");
+        CamBody b;
+        b.body_id = 0;
+        b.mesh    = TriangleMesh(its_make_cube(30, 20, 10));
+        model.bodies.push_back(std::move(b));
+        update_setup_frames(model, doc);
+        doc.operations[0] = default_operation(OpType::Parallel3D, &doc.tools[0]);
+        REQUIRE(generate_toolpath(doc, 0, model).ok());
+        REQUIRE(generate_toolpath(doc, 0, model, [](double) { return true; }).error == "Cancelled");
+    }
+}
+
+TEST_CASE("World points map to the part frame of an indexed setup", "[CamDocument]")
+{
+    CamModel model = box_model(100, 60, 20, Vec3d(10, 20, 5));
+    CamSetup s;
+    s.a_index_deg      = 90;
+    const Vec3d world(30, 40, 25);   // a point picked on the model
+    s.wcs.custom       = true;
+    s.wcs.custom_point = world_to_part_frame(s, model, world);
+    const CamSetupFrame f = compute_setup_frame(s, model);
+    REQUIRE((f.to_setup * world).norm() == Approx(0).margin(1e-9));
+    s.a_index_deg = 0;
+    REQUIRE((world_to_part_frame(s, model, world) - world).norm() == Approx(0).margin(1e-12));
 }

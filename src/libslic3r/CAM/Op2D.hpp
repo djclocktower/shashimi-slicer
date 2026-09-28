@@ -20,23 +20,23 @@ struct Region2D {
 Region2D resolve_selection_2d(const CamDocument& doc, const CamOperation& op, const CamModel& model);
 
 // Dispatch for every 2D OpType above.
-Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamModel& model);
+Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress = {});
 
 // Region-level building blocks (reused by Adaptive3D levels and RotaryWrap on the unrolled
 // cylinder). Cut from h.top down to h.bottom in op.stepdown levels, linking at h.retract/h.clearance.
 // Concentric inward offsets, helix/ramp entry, finishing passes.
 Toolpath pocket_region(const ExPolygons& region, const CamTool& tool, const CamOperation& op,
-                       const FeedsSpeeds& fs, const ResolvedHeights& h);
+                       const FeedsSpeeds& fs, const ResolvedHeights& h, const ProgressFn& progress = {});
 // Tool-radius offset per op.side, multi-depth, lead-in/out arcs of op.lead_in_radius.
 Toolpath contour_region(const ExPolygons& region, const CamTool& tool, const CamOperation& op,
-                        const FeedsSpeeds& fs, const ResolvedHeights& h);
+                        const FeedsSpeeds& fs, const ResolvedHeights& h, const ProgressFn& progress = {});
 // Rectilinear one-way passes (climb-consistent, return strokes at the retract height) over
 // `outline` (normally the stock outline) grown by the tool radius, at op.stepover.
 Toolpath face_region(const ExPolygons& outline, const CamTool& tool, const CamOperation& op,
-                     const FeedsSpeeds& fs, const ResolvedHeights& h);
+                     const FeedsSpeeds& fs, const ResolvedHeights& h, const ProgressFn& progress = {});
 // Tool centre along each chain (Slot/Engrave/Trace).
 Toolpath trace_chains(const Polylines& chains, const CamTool& tool, const CamOperation& op,
-                      const FeedsSpeeds& fs, const ResolvedHeights& h);
+                      const FeedsSpeeds& fs, const ResolvedHeights& h, const ProgressFn& progress = {});
 
 // Appends one Z level of an adaptive result: per entry a helical Ramp (op.helix_angle_deg) from
 // z_from down to z around Entry::center, then the paths at z (Cutting/LinkClear -> Feed,

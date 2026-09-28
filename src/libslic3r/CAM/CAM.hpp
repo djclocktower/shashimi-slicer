@@ -19,9 +19,11 @@
 namespace Slic3r::CAM {
 
 // Toolpath of doc.operations[op_index], dispatched by OpType, with toolpath_stats/estimate_time
-// applied. Errors (bad index, missing tool, disabled op, empty selection) come back in
+// applied, stamped with doc.model_generation, and (3D ops) gouge_check() warnings appended.
+// `progress` gets the fraction done, serialised (never called concurrently); returning true
+// cancels: the result is then empty with error "Cancelled". Errors (bad index, missing tool, disabled op, empty selection) come back in
 // Toolpath::error in plain language ("Tool 6 mm cannot enter this 5 mm slot"). Does not touch
 // doc.paths: the caller stores the result.
-Toolpath generate_toolpath(const CamDocument& doc, int op_index, const CamModel& model);
+Toolpath generate_toolpath(const CamDocument& doc, int op_index, const CamModel& model, const ProgressFn& progress = {});
 
 } // namespace Slic3r::CAM

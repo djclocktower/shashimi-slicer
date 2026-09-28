@@ -76,6 +76,10 @@ std::vector<HoleFeature> holes_for_op(const CamDocument& doc, const CamOperation
         return it->second;
     };
     auto add_hole = [&](const HoleFeature& h) {
+        // diameter filter: only recognised holes (picked points have no diameter)
+        if (h.diameter > 0 && ((op.hole_diameter_min > 0 && h.diameter < op.hole_diameter_min - 1e-6) ||
+                               (op.hole_diameter_max > 0 && h.diameter > op.hole_diameter_max + 1e-6)))
+            return;
         for (const HoleFeature& o : out)
             if ((o.center - h.center).head<2>().norm() < 1e-3)
                 return;
@@ -181,7 +185,7 @@ std::vector<HoleFeature> holes_for_op(const CamDocument& doc, const CamOperation
     return sorted;
 }
 
-Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath       tp;
     const CamTool* tool = doc.find_tool(op.tool_number);
@@ -198,7 +202,9 @@ Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const Ca
     const FeedsSpeeds     fs    = effective_feeds(op, *tool, setup.material, find_machine(setup.machine));
     const std::vector<HoleFeature> holes = holes_for_op(doc, op, model);
     if (holes.empty()) {
-        tp.error = "No holes found in the selection. Pick hole faces, hole edges, a face with holes or points.";
+        tp.error = op.hole_diameter_min > 0 || op.hole_diameter_max > 0
+                       ? "No hole in the selection is within the hole diameter filter."
+                       : "No holes found in the selection. Pick hole faces, hole edges, a face with holes or points.";
         return tp;
     }
     if (op.type == OpType::Drill && op.cycle == DrillCycle::Tap && tool->type != ToolType::Tap)
@@ -212,6 +218,10 @@ Toolpath generate_drill(const CamDocument& doc, const CamOperation& op, const Ca
     double clearance = -1e30;
     int    done      = 0;
     for (size_t i = 0; i < holes.size(); ++i) {
+        if (progress && progress(double(i) / holes.size())) {
+            tp.error = "Cancelled";
+            return tp;
+        }
         const HoleFeature& hole  = holes[i];
         const bool         spot  = tool->type == ToolType::SpotDrill || tool->type == ToolType::ChamferMill;
         if (hole.diameter > 0 && !spot && tool->diameter > hole.diameter + 1e-3) {

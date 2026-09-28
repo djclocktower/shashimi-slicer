@@ -320,7 +320,7 @@ void add_warning(Toolpath& tp, const std::string& text)
 
 // ---- Parallel3D --------------------------------------------------------------------------------
 
-Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath           tp;
     internal::OpContext ctx = internal::op_context(doc, op, model);
@@ -394,8 +394,11 @@ Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, con
     };
 
     std::vector<std::vector<std::vector<Vec3d>>> rows(nrows);
+    ProgressCounter pc(progress, size_t(nrows), 0, 0.95);
     tbb::parallel_for(tbb::blocked_range<int>(0, nrows), [&](const tbb::blocked_range<int>& r) {
         for (int j = r.begin(); j < r.end(); ++j) {
+            if (pc.step())
+                return;
             const double y = y0 + j * dy;
             // nudge the first/last row inside so the boundary edge itself is kept
             const double yc = j == 0 ? y + 1e-4 : j == nrows - 1 ? y - 1e-4 : y;
@@ -417,6 +420,10 @@ Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, con
             }
         }
     });
+    if (pc.cancelled()) {
+        tp.error = "Cancelled";
+        return tp;
+    }
 
     std::vector<std::vector<Vec3d>> runs;
     for (auto& row : rows)
@@ -497,7 +504,7 @@ Toolpath generate_parallel3d(const CamDocument& doc, const CamOperation& op, con
 
 // ---- Contour3D ---------------------------------------------------------------------------------
 
-Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath            tp;
     internal::OpContext ctx = internal::op_context(doc, op, model);
@@ -535,8 +542,11 @@ Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, cons
     const std::vector<ExPolygons> shadows = shadow_sections(ctx.mesh.its, zs);
 
     std::vector<ExPolygons> forbidden(levels.size());
+    ProgressCounter pc(progress, levels.size(), 0, 0.9);
     tbb::parallel_for(tbb::blocked_range<size_t>(0, levels.size()), [&](const tbb::blocked_range<size_t>& r) {
         for (size_t l = r.begin(); l < r.end(); ++l) {
+            if (pc.step())
+                return;
             Polygons all;
             for (size_t k = 0; k < ts.size(); ++k) {
                 const ExPolygons& s = shadows[l * ts.size() + k];
@@ -546,6 +556,10 @@ Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, cons
             forbidden[l] = union_ex(all);
         }
     });
+    if (pc.cancelled()) {
+        tp.error = "Cancelled";
+        return tp;
+    }
 
     const bool   climb = op.climb;
     const double rl    = std::max(0., op.lead_in_radius);
@@ -659,7 +673,7 @@ Toolpath generate_contour3d(const CamDocument& doc, const CamOperation& op, cons
 
 // ---- Adaptive3D --------------------------------------------------------------------------------
 
-Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath            tp;
     internal::OpContext ctx = internal::op_context(doc, op, model);
@@ -713,13 +727,9 @@ Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, con
     ap.tolerance         = std::max(op.tolerance, 0.02);
     ap.stock_to_leave    = op.stock_to_leave_radial;
     ap.climb             = op.climb;
-    // ponytail: pocket mode over the stock grown by D + 1 mm (the tool can still pass fully outside
-    // the stock) instead of Adaptive's outside_is_air mode, which is ~100x slower at stepovers
-    // below ~20 % of D (52 s vs 0.4 s on 40 x 40 mm). Entries helix into the stock instead of
-    // plunging in the air, and the margin is cut as if it were stock (passing it as
-    // `already_cleared` is as slow as air mode). Switch back once air mode is fast.
-    ap.outside_is_air = false;
-    const float grow  = float(scale_(D + 1));
+    // The stock section is material with air around it: Adaptive enters from outside the stock
+    // (plunging in the air) instead of helixing in.
+    ap.outside_is_air = true;
 
     // A level whose stock and keep-out match the previous one clears the same XY: reuse it.
     // (op.rest_machining is not used across levels: nothing at a new Z is cleared yet.)
@@ -744,8 +754,13 @@ Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, con
         std::vector<Polygons>     rings; // outermost first; tool-centre loops
     };
     std::vector<Plan> plans(levels.size());
+    ProgressCounter   pc(progress, unique.size(), 0, 0.95);
+    if (progress)
+        ap.cancel = [&pc](double) { return pc.poll(); };
     tbb::parallel_for(tbb::blocked_range<size_t>(0, unique.size(), 1), [&](const tbb::blocked_range<size_t>& r) {
         for (size_t u = r.begin(); u < r.end(); ++u) {
+            if (pc.step())
+                return;
             const size_t l = unique[u];
             if (stock[l].empty())
                 continue;
@@ -761,9 +776,13 @@ Toolpath generate_adaptive3d(const CamDocument& doc, const CamOperation& op, con
                 }
                 std::reverse(plans[l].rings.begin(), plans[l].rings.end());
             } else
-                plans[l].res = Adaptive::clear(offset_ex(stock[l], grow), keep_out[l], ap);
+                plans[l].res = Adaptive::clear(stock[l], keep_out[l], ap);
         }
     });
+    if (pc.cancelled()) {
+        tp.error = "Cancelled";
+        return tp;
+    }
 
     for (size_t l = 0; l < levels.size(); ++l) {
         const Plan&  plan   = plans[src[l]];

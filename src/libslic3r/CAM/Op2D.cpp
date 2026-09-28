@@ -204,11 +204,12 @@ struct Gen {
     // Tangent lead arc ending (lead-in) or starting (lead-out) at p with travel direction t, on
     // the side away from the material. Returns the far end; radius 0 when it does not fit.
     // `ok` tells whether a tool-centre point is allowed.
-    double fit_lead(const Vec2d& p, const Vec2d& t, bool material_right, bool in, const std::function<bool(const Vec2d&)>& ok) const
+    double fit_lead(double r_max, const Vec2d& p, const Vec2d& t, bool material_right, bool in,
+                    const std::function<bool(const Vec2d&)>& ok) const
     {
         const Vec2d left(-t.y(), t.x());
         const Vec2d n_air = material_right ? left : Vec2d(-left);
-        for (double R = op.lead_in_radius; R >= 0.1; R *= 0.5) {
+        for (double R = r_max; R >= 0.1; R *= 0.5) {
             const Vec2d c = p + R * n_air;
             bool        fits = true;
             for (int k = 1; k <= 8 && fits; ++k) {
@@ -223,22 +224,36 @@ struct Gen {
         return 0;
     }
 
-    // Cuts closed loops at Z with optional tangent lead arcs. `ok` = allowed tool-centre points
-    // for leads; `safe` = area where the tool may feed between loops at this Z (or null).
+    // Cuts closed loops at Z. `lead_r` > 0: tangent lead-in/out arcs of up to that radius (fitted
+    // to `ok`, the allowed tool-centre points). `ring_r` > 0 (pockets): when the tool is already
+    // at Z on another ring, the next ring starts `ring_r` ahead and is entered on a tangent arc from
+    // the cleared side, so the engagement grows gradually instead of a straight step into a full
+    // stepover. `safe` = area where the tool may feed between loops at this Z (or null).
     void cut_loops(std::vector<Points> loops, double z, const std::function<bool(const Vec2d&)>& ok, const ExPolygons* safe,
-                   bool leads)
+                   double lead_r, double ring_r = 0)
     {
         while (!loops.empty()) {
+            const Point here  = tp.moves.empty() ? loops.front().front() : p2(cur(tp));
+            const bool  at_z  = !tp.moves.empty() && std::abs(cur(tp).z() - z) < 1e-6;
+            Point       aim   = here;
+            bool        on_loop = false;   // e.g. placed on the loop start by an entry
+            for (const Points& l : loops)
+                for (const Point& q : l)
+                    on_loop |= (q - here).cast<double>().norm() < scale_(1e-3);
+            if (ring_r > 0 && at_z && !on_loop && tp.moves.size() > 1) {
+                const Vec2d d = (cur(tp) - tp.moves[tp.moves.size() - 2].to).head<2>();
+                if (d.norm() > 1e-6)
+                    aim = p2(cur(tp) + Vec3d(d.x(), d.y(), 0).normalized() * ring_r);
+            }
             // nearest loop next
-            const Point here = tp.moves.empty() ? loops.front().front() : p2(cur(tp));
-            size_t      best = 0;
-            double      bd   = 1e300;
+            size_t best = 0;
+            double bd   = 1e300;
             for (size_t i = 0; i < loops.size(); ++i)
                 for (const Point& q : loops[i]) {
-                    const double d = (q - here).cast<double>().squaredNorm();
+                    const double d = (q - aim).cast<double>().squaredNorm();
                     if (d < bd) { bd = d; best = i; }
                 }
-            Points pts = start_loop_at(loops[best], tp.moves.empty() ? nullptr : &here);
+            Points pts = start_loop_at(loops[best], tp.moves.empty() ? nullptr : &aim);
             loops.erase(loops.begin() + best);
             if (pts.size() < 2)
                 continue;
@@ -247,8 +262,9 @@ struct Gen {
             const Vec2d t1 = (p - v2(pts.back())).normalized();
             // travel orientation decides the material side: material right for climb
             const bool mat_right = op.climb;
-            double     rin = leads && op.lead_in_radius > 0 ? fit_lead(p, t0, mat_right, true, ok) : 0;
-            double     rout = leads && op.lead_in_radius > 0 ? fit_lead(p, t1, mat_right, false, ok) : 0;
+            const bool ring_step = ring_r > 0 && at_z && (v2(here) - p).norm() > 1e-3;
+            double     rin  = lead_r > 0 ? fit_lead(lead_r, p, t0, mat_right, true, ok) : ring_step ? fit_lead(ring_r, p, t0, mat_right, true, ok) : 0;
+            double     rout = lead_r > 0 ? fit_lead(lead_r, p, t1, mat_right, false, ok) : 0;
             const ArcDir dir = mat_right ? ArcDir::CCW : ArcDir::CW;   // turning away from the air side
             if (rin > 0) {
                 const Vec2d left(-t0.y(), t0.x());
@@ -270,6 +286,15 @@ struct Gen {
         }
     }
 };
+
+// Reports progress; true (and tp.error set) when the caller asked to cancel.
+bool cancelled(Toolpath& tp, const ProgressFn& progress, double fraction)
+{
+    if (!progress || !progress(fraction))
+        return false;
+    tp.error = "Cancelled";
+    return true;
+}
 
 std::vector<Points> loops_of(const ExPolygons& ex, bool contours, bool holes, bool material_left, bool climb)
 {
@@ -343,7 +368,7 @@ std::vector<double> z_levels(double top, double bottom, double stepdown)
 // ---- Pocket ------------------------------------------------------------------------------------
 
 Toolpath pocket_region(const ExPolygons& region, const CamTool& tool, const CamOperation& op, const FeedsSpeeds& fs,
-                       const ResolvedHeights& h)
+                       const ResolvedHeights& h, const ProgressFn& progress)
 {
     Toolpath tp;
     if (std::string e = check_common(tool, op, h, true); !e.empty()) {
@@ -378,7 +403,7 @@ Toolpath pocket_region(const ExPolygons& region, const CamTool& tool, const CamO
 
     const double              bottom = h.bottom + std::max(0., op.stock_to_leave_axial);
     const std::vector<double> zs     = z_levels(h.top, bottom, op.stepdown);
-    const auto                ok_all = [](const Vec2d&) { return true; };
+    const auto in_wall = [&](const Vec2d& q) { return inside(wall, p2(Vec3d(q.x(), q.y(), 0))); };
     const double helix_r0 = 0.5 * (op.helix_diameter > 0 ? op.helix_diameter : 0.9 * tool.diameter);
 
     // Entry into a leaf (innermost ring) at z from z_prev: helix at its innermost point, else a
@@ -415,7 +440,7 @@ Toolpath pocket_region(const ExPolygons& region, const CamTool& tool, const CamO
             loops.front()    = start_loop_at(loops.front(), tp.moves.empty() ? nullptr : &here);
             enter(n, loops.front(), z_prev, z);
         }
-        g.cut_loops(std::move(loops), z, ok_all, &wall, false);
+        g.cut_loops(std::move(loops), z, in_wall, &wall, 0, op.stepover);
     };
 
     auto cut_level = [&](const RingNode& root, double z_prev, double z) {
@@ -426,25 +451,25 @@ Toolpath pocket_region(const ExPolygons& region, const CamTool& tool, const CamO
             for (const ExPolygon& e : f)
                 if (inside({e}, root.ex.contour.points.front()) || inside({root.ex}, e.contour.points.front()))
                     mine.push_back(e);
-            g.cut_loops(loops_of(mine, true, true, false, op.climb), z, ok_all, &wall, false);
+            g.cut_loops(loops_of(mine, true, true, false, op.climb), z, in_wall, &wall, 0, op.stepover);
         }
     };
 
+    const double steps = double(roots.size() * zs.size());
     if (op.ordering == CutOrdering::LevelFirst) {
-        double z_prev = h.top;
-        for (double z : zs) {
-            for (const RingNode& root : roots)
-                cut_level(root, z_prev, z);
-            z_prev = z;
-        }
-    } else {
-        for (const RingNode& root : roots) {
-            double z_prev = h.top;
-            for (double z : zs) {
-                cut_level(root, z_prev, z);
-                z_prev = z;
+        for (size_t l = 0; l < zs.size(); ++l)
+            for (size_t r = 0; r < roots.size(); ++r) {
+                if (cancelled(tp, progress, (l * roots.size() + r) / steps))
+                    return tp;
+                cut_level(roots[r], l == 0 ? h.top : zs[l - 1], zs[l]);
             }
-        }
+    } else {
+        for (size_t r = 0; r < roots.size(); ++r)
+            for (size_t l = 0; l < zs.size(); ++l) {
+                if (cancelled(tp, progress, (r * zs.size() + l) / steps))
+                    return tp;
+                cut_level(roots[r], l == 0 ? h.top : zs[l - 1], zs[l]);
+            }
     }
     append_retract(tp, h.clearance);
     return tp;
@@ -453,7 +478,7 @@ Toolpath pocket_region(const ExPolygons& region, const CamTool& tool, const CamO
 // ---- Contour -----------------------------------------------------------------------------------
 
 Toolpath contour_region(const ExPolygons& region, const CamTool& tool, const CamOperation& op, const FeedsSpeeds& fs,
-                        const ResolvedHeights& h)
+                        const ResolvedHeights& h, const ProgressFn& progress)
 {
     Toolpath tp;
     if (std::string e = check_common(tool, op, h, false); !e.empty()) {
@@ -495,9 +520,11 @@ Toolpath contour_region(const ExPolygons& region, const CamTool& tool, const Cam
 
     const std::vector<double> zs = z_levels(h.top, h.bottom + std::max(0., op.stock_to_leave_axial), op.stepdown);
     for (double z : zs) {
-        g.cut_loops(loops(pass(nf * fst)), z, ok, nullptr, true);
+        if (cancelled(tp, progress, (h.top - z) / (h.top - zs.back() + 1e-9)))
+            return tp;
+        g.cut_loops(loops(pass(nf * fst)), z, ok, nullptr, op.lead_in_radius);
         for (int j = nf - 1; j >= 0; --j)
-            g.cut_loops(loops(pass(j * fst)), z, ok, nullptr, true);
+            g.cut_loops(loops(pass(j * fst)), z, ok, nullptr, op.lead_in_radius);
     }
     append_retract(tp, h.clearance);
     return tp;
@@ -506,7 +533,7 @@ Toolpath contour_region(const ExPolygons& region, const CamTool& tool, const Cam
 // ---- Face --------------------------------------------------------------------------------------
 
 Toolpath face_region(const ExPolygons& outline, const CamTool& tool, const CamOperation& op, const FeedsSpeeds& fs,
-                     const ResolvedHeights& h)
+                     const ResolvedHeights& h, const ProgressFn& progress)
 {
     Toolpath tp;
     if (std::string e = check_common(tool, op, h, true); !e.empty()) {
@@ -538,6 +565,8 @@ Toolpath face_region(const ExPolygons& outline, const CamTool& tool, const CamOp
     const double bottom = h.bottom + std::max(0., op.stock_to_leave_axial);
     for (double z : z_levels(h.top, bottom, op.stepdown))
         for (const Polyline& row : rows) {
+            if (cancelled(tp, progress, (h.top - z) / (h.top - bottom + 1e-9)))
+                return tp;
             g.link(p3(row.first_point(), z));
             for (size_t i = 1; i < row.points.size(); ++i)
                 g.feed(p3(row.points[i], z));
@@ -549,7 +578,7 @@ Toolpath face_region(const ExPolygons& outline, const CamTool& tool, const CamOp
 // ---- Trace / Engrave / Slot --------------------------------------------------------------------
 
 Toolpath trace_chains(const Polylines& chains, const CamTool& tool, const CamOperation& op, const FeedsSpeeds& fs,
-                      const ResolvedHeights& h)
+                      const ResolvedHeights& h, const ProgressFn& progress)
 {
     Toolpath tp;
     if (std::string e = check_common(tool, op, h, false); !e.empty()) {
@@ -566,6 +595,8 @@ Toolpath trace_chains(const Polylines& chains, const CamTool& tool, const CamOpe
 
     std::vector<Polyline> todo(chains.begin(), chains.end());
     while (!todo.empty()) {
+        if (cancelled(tp, progress, 1. - double(todo.size()) / chains.size()))
+            return tp;
         // nearest chain end next (open chains may be reversed)
         const Point here = tp.moves.empty() ? todo.front().first_point() : p2(cur(tp));
         size_t      best = 0;
@@ -661,7 +692,7 @@ void append_adaptive_level(Toolpath& tp, const Adaptive::Result& res, const CamO
 }
 
 static Toolpath adaptive_region(const ExPolygons& region, const CamTool& tool, const CamOperation& op, const FeedsSpeeds& fs,
-                                const ResolvedHeights& h)
+                                const ResolvedHeights& h, const ProgressFn& progress)
 {
     Toolpath tp;
     if (std::string e = check_common(tool, op, h, false); !e.empty()) {
@@ -676,16 +707,20 @@ static Toolpath adaptive_region(const ExPolygons& region, const CamTool& tool, c
     p.tolerance         = std::max(0.001, op.tolerance);
     p.stock_to_leave    = std::max(0., op.stock_to_leave_radial);
     p.climb             = op.climb;
+    if (progress)
+        p.cancel = [&](double f) { return progress(0.95 * f); };
     // Every 2D level clears the same region: compute once, replay per level.
     const Adaptive::Result res = Adaptive::clear(region, {}, p);
     if (!res.ok) {
-        tp.error = res.error;
+        tp.error = res.error == "Cancelled." ? "Cancelled" : res.error;
         return tp;
     }
     for (const std::string& w : res.warnings)
         tp.warnings.push_back({-1, Vec3d::Zero(), w});
     double z_prev = h.top;
     for (double z : z_levels(h.top, h.bottom + std::max(0., op.stock_to_leave_axial), op.stepdown)) {
+        if (cancelled(tp, progress, 0.95))
+            return tp;
         append_adaptive_level(tp, res, op, fs, h, z_prev, z);
         z_prev = z;
     }
@@ -730,7 +765,7 @@ static Toolpath chamfer_region(const ExPolygons& region, const Polylines& chains
         const ExPolygons path = offset_ex(region, float(scale_(D)), ClipperLib::jtRound, kArcTol);
         const ExPolygons keep = D > 0.02 ? offset_ex(region, float(scale_(D - 0.01)), ClipperLib::jtRound, kArcTol) : region;
         g.cut_loops(loops_of(path, true, true, true, op.climb), z, [&](const Vec2d& q) { return !inside(keep, p2(Vec3d(q.x(), q.y(), 0))); },
-                    nullptr, true);
+                    nullptr, op.lead_in_radius);
     }
     if (!chains.empty()) {
         Toolpath t2 = trace_chains(chains, tool, one, fs, hh);
@@ -867,7 +902,7 @@ Region2D resolve_selection_2d(const CamDocument& doc, const CamOperation& op, co
     return out;
 }
 
-Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamModel& model)
+Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamModel& model, const ProgressFn& progress)
 {
     Toolpath       tp;
     const CamTool* tool = doc.find_tool(op.tool_number);
@@ -892,7 +927,7 @@ Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamMo
         const BoundingBoxf3& s = frame.stock;
         const ExPolygons     outline{ExPolygon(Polygon::new_scale({{s.min.x(), s.min.y()}, {s.max.x(), s.min.y()},
                                                                    {s.max.x(), s.max.y()}, {s.min.x(), s.max.y()}}))};
-        return face_region(outline, *tool, op, fs, resolve_heights(op.heights, frame, frame.model.max.z(), frame.model.max.z()));
+        return face_region(outline, *tool, op, fs, resolve_heights(op.heights, frame, frame.model.max.z(), frame.model.max.z()), progress);
     }
 
     Region2D sel = resolve_selection_2d(doc, op, model);
@@ -922,9 +957,9 @@ Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamMo
             return tp;
         }
         closed = union_ex(closed);
-        return op.type == OpType::Pocket2D   ? pocket_region(closed, *tool, op, fs, h)
-             : op.type == OpType::Adaptive2D ? adaptive_region(closed, *tool, op, fs, h)
-                                             : contour_region(closed, *tool, op, fs, h);
+        return op.type == OpType::Pocket2D   ? pocket_region(closed, *tool, op, fs, h, progress)
+             : op.type == OpType::Adaptive2D ? adaptive_region(closed, *tool, op, fs, h, progress)
+                                             : contour_region(closed, *tool, op, fs, h, progress);
     case OpType::Chamfer2D: return chamfer_region(union_ex(sel.regions), sel.chains, *tool, op, fs, h);
     case OpType::Slot:
     case OpType::Engrave:
@@ -934,7 +969,7 @@ Toolpath generate_2d(const CamDocument& doc, const CamOperation& op, const CamMo
         for (const ExPolygon& e : sel.regions)
             for (const Polygon& p : to_polygons(e))
                 chains.push_back(p.split_at_first_point());
-        return trace_chains(chains, *tool, op, fs, h);
+        return trace_chains(chains, *tool, op, fs, h, progress);
     }
     default: tp.error = "This is not a 2D operation."; return tp;
     }

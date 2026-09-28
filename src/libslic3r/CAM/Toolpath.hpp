@@ -4,6 +4,9 @@
 
 #include "libslic3r/CAM/CamTypes.hpp"
 
+#include <algorithm>
+#include <atomic>
+
 namespace Slic3r::CAM {
 
 // Moves the tool from the toolpath's last position to `to` without cutting stock:
@@ -34,5 +37,30 @@ double move_length(const Vec3d& from, double from_a, const Move& m);
 // Machining time in seconds: rapids at machine.rapid_feed, cutting moves at their feed clamped to
 // machine.max_feed_xy / max_feed_z. No acceleration model.
 double estimate_time(const Toolpath& tp, const MachineProfile& machine);
+
+// Progress over `total` work items, safe to use from parallel loops: step() counts one item and
+// reports lo..hi; poll() re-reports without counting (e.g. from Adaptive::Params::cancel). Both
+// return true once the callback asked to cancel; skip remaining work then.
+class ProgressCounter
+{
+public:
+    ProgressCounter(const ProgressFn& fn, size_t total, double lo = 0, double hi = 1)
+        : m_fn(fn), m_total(std::max<size_t>(1, total)), m_lo(lo), m_hi(hi) {}
+    bool step() { ++m_done; return poll(); }
+    bool poll()
+    {
+        if (!m_stop && m_fn && m_fn(m_lo + (m_hi - m_lo) * double(std::min(m_done.load(), m_total)) / double(m_total)))
+            m_stop = true;
+        return m_stop;
+    }
+    bool cancelled() const { return m_stop; }
+
+private:
+    const ProgressFn&   m_fn;
+    size_t              m_total;
+    double              m_lo, m_hi;
+    std::atomic<size_t> m_done{0};
+    std::atomic<bool>   m_stop{false};
+};
 
 } // namespace Slic3r::CAM

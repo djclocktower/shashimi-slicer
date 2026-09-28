@@ -4,6 +4,7 @@
 #include "libslic3r/ClipperUtils.hpp"
 
 #include <set>
+#include <sstream>
 
 using namespace Slic3r;
 using namespace Slic3r::CAM;
@@ -171,6 +172,20 @@ TEST_CASE("Pocket clears the region around an island", "[Cam2D]")
         for (const Seg& s : segments(tp))
             if (cutting(s.kind) && s.b.z() < 0)
                 REQUIRE(wall.front().contains(Point(coord_t(scale_(s.b.x())), coord_t(scale_(s.b.y())))));
+        // Rings are joined by tangent arcs: a straight feed across rings (e.g. through the cleared
+        // centre) is always followed by a lead-in arc or an entry, never straight into the cut.
+        const ExPolygons outer{ExPolygon(rect(0, 0, 60, 40))};
+        int steps = 0, ring_arcs = 0;
+        for (size_t i = 2; i + 1 < tp.moves.size(); ++i) {
+            const Move& m = tp.moves[i];
+            const Vec3d& a = tp.moves[i - 1].to;
+            ring_arcs += m.kind == Move::Kind::LeadIn;
+            steps += m.kind == Move::Kind::Feed && !is_arc(m) && !is_arc(tp.moves[i - 1]) && tp.moves[i - 1].kind != Move::Kind::Ramp &&
+                     std::abs(a.z() - m.to.z()) < 1e-9 && std::abs(dist_to(outer, m.to) - dist_to(outer, a)) > 0.5 * op.stepover &&
+                     tp.moves[i + 1].kind == Move::Kind::Feed && !is_arc(tp.moves[i + 1]);
+        }
+        REQUIRE(ring_arcs > 0);
+        REQUIRE(steps == 0);
         if (entry == EntryType::Helix) {
             bool helix = false;
             for (const Move& m : tp.moves) helix |= m.kind == Move::Kind::Ramp && is_arc(m);
