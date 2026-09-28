@@ -65,6 +65,7 @@ public:
         std::atomic<int> max_rx_bytes{0};    // largest RX buffer fill seen (GRBL: must stay <= 128)
         std::atomic<int> fail_on_line{0};    // > 0: answer error:20 to that line (1-based, all lines)
         std::atomic<int> lines_per_read{8};
+        std::atomic<int> resets{0};          // soft resets (0x18) received
         // > 0: moves take distance / feed / time_scale (15-block planner, like the real thing);
         // 0: they complete at once.
         std::atomic<double> time_scale{0};
@@ -173,7 +174,9 @@ public:
     void jog(double dx, double dy, double dz, double speed_mm_s);   // $J=G91 G21 X Y Z F
     void jog_cancel();                                   // 0x85
     void set_origin();                                   // G10 L20 P1 X0 Y0
-    void fire(double power_pct, int ms);                 // low-power pulse: M3 S.. G4 P.. M5 (0 ms = until stop_fire)
+    // Low-power pulse (0 ms = until stop_fire). GRBL: `G1 F.. M3 S..` (laser mode ignores M3 in G0
+    // mode), G4 P.., `M5 S0`; Marlin: M3 S.. / M5.
+    void fire(double power_pct, int ms);
     void stop_fire();
 
     // ---- Job control ----------------------------------------------------------------------------

@@ -91,7 +91,9 @@ LaserPath make_path(const std::vector<Vec2d>& pts, bool closed, const Transform2
     LaserPath p;
     p.closed = closed;
     for (const Vec2d& v : pts) {
-        const Point q = Point::new_scale(t * v);
+        const Vec2d w = t * v;
+        if (!std::isfinite(w.x()) || !std::isfinite(w.y()) || std::abs(w.x()) > 1e6 || std::abs(w.y()) > 1e6) continue;   // corrupt input
+        const Point q = Point::new_scale(w);
         if (p.pts.points.empty() || p.pts.points.back() != q) p.pts.points.push_back(q);
     }
     if (closed && p.pts.size() > 1 && p.pts.points.front() == p.pts.points.back()) p.pts.points.pop_back();
@@ -114,7 +116,10 @@ std::string lower_ext(const std::string& path)
 }
 
 // Grayscale image shape from encoded bytes (PNG, JPEG, ...); transparent pixels become white.
-bool decode_gray(const std::string& bytes, LaserShape& s)
+constexpr double kMaxImagePixels = 36e6;   // 6000 x 6000
+
+// `downscale` (optional) gets the resize factor when the image was larger than kMaxImagePixels.
+bool decode_gray(const std::string& bytes, LaserShape& s, double* downscale = nullptr)
 {
     try {
         const cv::Mat raw(1, int(bytes.size()), CV_8UC1, const_cast<char*>(bytes.data()));
@@ -138,6 +143,12 @@ bool decode_gray(const std::string& bytes, LaserShape& s)
             cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
         else
             gray = img;
+        // Cap the stored resolution: the pixels live in the document, the 3MF and every undo step.
+        if (const double px = double(gray.cols) * gray.rows; px > kMaxImagePixels) {
+            const double f = std::sqrt(kMaxImagePixels / px);
+            cv::resize(gray, gray, cv::Size(std::max(1, int(gray.cols * f)), std::max(1, int(gray.rows * f))), 0, 0, cv::INTER_AREA);
+            if (downscale) *downscale = f;
+        }
         s.type    = ShapeType::Image;
         s.image_w = gray.cols;
         s.image_h = gray.rows;
@@ -275,6 +286,7 @@ public:
     std::map<std::string, DxfBlock> blocks;
     std::vector<DxfEnt>             entities;
     std::map<std::string, int>      unsupported;
+    bool                            capped{false};
 
     bool parse(const std::string& text)
     {
@@ -371,6 +383,12 @@ public:
     void emit(const std::vector<DxfEnt>& ents, const Transform2d& T, int block_aci, int parent, int depth)
     {
         for (const DxfEnt& e : ents) {
+            // Nested INSERTs multiply: a block inserting itself ten times is 10^16 shapes (~400 bytes each).
+            if (res.shapes.size() >= 250000) {
+                if (!capped) res.warnings.push_back("The drawing has more than 250000 shapes; the rest was skipped.");
+                capped = true;
+                return;
+            }
             const int layer = layer_of(e, block_aci);
             std::vector<Vec2d> pts;
             bool closed = false;
@@ -423,14 +441,19 @@ public:
                 const Vec2d  c(e.num(10), e.num(20));
                 const double r = e.num(40), a0 = e.num(50) * M_PI / 180;
                 double a1 = e.num(51) * M_PI / 180;
-                while (a1 <= a0) a1 += 2 * M_PI;
+                // fmod, not a += 2 pi loop: an angle of 1e300 or inf in a corrupt file must not hang.
+                a1 = a0 + std::fmod(a1 - a0, 2 * M_PI);
+                if (a1 <= a0) a1 += 2 * M_PI;
+                if (!std::isfinite(a1) || !std::isfinite(r)) continue;
                 pts.push_back(c + r * Vec2d(std::cos(a0), std::sin(a0)));
                 flatten_arc(pts, c, r, a0, a1);
             } else if (e.type == "ELLIPSE") {
                 const Vec2d  c(e.num(10), e.num(20)), major(e.num(11), e.num(21));
                 const double ratio = e.num(40, 1), t0 = e.num(41, 0);
                 double t1 = e.num(42, 2 * M_PI);
-                while (t1 <= t0) t1 += 2 * M_PI;
+                t1 = t0 + std::fmod(t1 - t0, 2 * M_PI);
+                if (t1 <= t0) t1 += 2 * M_PI;
+                if (!std::isfinite(t1)) continue;
                 const Vec2d minor = Vec2d(-major.y(), major.x()) * ratio;
                 const double R = major.norm();
                 const int n = std::clamp(int(std::ceil((t1 - t0) / (2 * std::acos(1 - std::min(kTol / std::max(R, kTol), 1.))))), 8, 20000);
@@ -495,7 +518,7 @@ public:
     // Non-uniform rational B-spline by de Boor (weights from code 41); fit points only -> polyline.
     static std::vector<Vec2d> spline(const DxfEnt& e)
     {
-        const int           p  = std::max(1, int(e.num(71, 3)));
+        const int           p  = std::clamp(int(e.num(71, 3)), 1, 11);
         std::vector<double> U  = e.all(40);
         const std::vector<double> xs = e.all(10), ys = e.all(20);
         std::vector<double> w = e.all(41);
@@ -508,6 +531,7 @@ public:
             return fit;   // ponytail: fit points joined by lines; interpolate if fit-only splines matter
         }
         const size_t n = P.size();
+        if (int(n) <= p) return P;   // too few control points for the degree: the control polygon
         if (w.size() != n) w.assign(n, 1.);
         if (U.size() != n + p + 1) {   // missing / bad knots: clamped uniform
             U.clear();
@@ -596,13 +620,15 @@ ImportResult import_image(const std::string& path, double dpi)
     ImportResult res;
     std::string bytes;
     LaserShape  s;
-    if (!read_file(path, bytes) || !decode_gray(bytes, s)) {
+    double      downscale = 1;
+    if (!read_file(path, bytes) || !decode_gray(bytes, s, &downscale)) {
         res.error = "The image could not be read. Supported formats: PNG, JPEG, BMP, TIFF.";
         return res;
     }
     if (dpi <= 0) dpi = 254;
-    s.width_mm  = s.image_w * 25.4 / dpi;
-    s.height_mm = s.image_h * 25.4 / dpi;
+    s.width_mm  = s.image_w / downscale * 25.4 / dpi;   // the size of the original pixels
+    s.height_mm = s.image_h / downscale * 25.4 / dpi;
+    if (downscale < 1) res.warnings.push_back("The image is very large; it was reduced to 36 megapixels.");
     s.xform.translation() = Vec2d(s.width_mm / 2, s.height_mm / 2);   // lower-left corner at the origin
     s.name = boost::filesystem::path(path).filename().string();
     res.shapes.push_back(std::move(s));

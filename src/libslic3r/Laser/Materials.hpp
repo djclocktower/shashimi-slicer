@@ -30,7 +30,12 @@ bool save_materials(const std::string& path, const std::vector<MaterialEntry>& e
 // Sculpfun-class diode", "Generic GRBL CO2" (600x400), "grblHAL", "Marlin laser" (inline M3 I,
 // S255) and "Smoothie/Cohesion3D". JSON keys are the struct member names; missing keys keep defaults.
 std::vector<LaserDevice> default_devices();
-bool load_devices(const std::string& path, std::vector<LaserDevice>& out, std::string* error = nullptr);
+// Every loaded profile goes through validate_device(); its messages are appended to `warnings`.
+bool load_devices(const std::string& path, std::vector<LaserDevice>& out, std::string* error = nullptr,
+                  std::vector<std::string>* warnings = nullptr);
+// Repairs values a hand-edited profile may carry: bed 10..3000 mm, s_max > 0 (else 1000), frame
+// power 0..20 %, speeds and acceleration > 0 (else the defaults). One message per repaired field.
+std::vector<std::string> validate_device(LaserDevice& device);
 bool save_devices(const std::string& path, const std::vector<LaserDevice>& devices, std::string* error = nullptr);
 
 } // namespace Slic3r::Laser

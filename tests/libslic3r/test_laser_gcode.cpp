@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include <algorithm>
 
 #include "libslic3r/Laser/LaserGCode.hpp"
 #include "libslic3r/Laser/Laser.hpp"
@@ -65,7 +66,7 @@ TEST_CASE("GRBL output: header, dynamic power, modal words, footer", "[LaserGCod
     const std::vector<std::string> l = lines_of(g);
     CHECK(l[0] == "G21 G90 G54");
     CHECK(l[1] == "M4 S0");
-    CHECK(has_line(g, "G0 X10 Y10"));
+    CHECK(has_line(g, "G0 X10 Y10 S0"));       // travel always carries S0 (safe even with $32=0)
     CHECK(has_line(g, "G1 X20 S500 F1200"));   // S = 50 % of 1000, F = 20 mm/s * 60
     CHECK(has_line(g, "G1 Y20"));              // modal: unchanged X, S and F are not repeated
     CHECK(l[l.size() - 3] == "M5");
@@ -111,7 +112,7 @@ TEST_CASE("GRBL output: header, dynamic power, modal words, footer", "[LaserGCod
         CHECK(has_line(g2, "G0 Z-1.5"));
         CHECK(has_line(g2, "M8"));
         CHECK(has_line(g2, "M9"));
-        CHECK(has_line(g2, "M3 S800"));
+        CHECK(has_line(g2, "G1 F1200 M3 S800"));   // G1 mode: GRBL laser mode ignores M3 in G0 mode
         CHECK(has_line(g2, "G4 P0.25"));
     }
     SECTION("invalid jobs")
@@ -148,7 +149,8 @@ TEST_CASE("A scan row with three runs writes one G1 per run plus dark stretches"
     for (const std::string& x : l)
         if (x.rfind("G1", 0) == 0) g1.push_back(x);
     REQUIRE(g1.size() == 6);
-    CHECK(g1[0] == "G1 X2 S0 F6000");   // overscan in, laser off
+    CHECK(std::find(l.begin(), l.end(), "G0 X0 Y5 S0") != l.end());
+    CHECK(g1[0] == "G1 X2 F6000");      // overscan in, laser off (S0 modal from the travel)
     CHECK(g1[1] == "G1 X8 S1000");
     CHECK(g1[2] == "G1 X12 S400");
     CHECK(g1[3] == "G1 X20 S0");        // gap
@@ -176,6 +178,10 @@ TEST_CASE("Marlin, Smoothie and the origin corner", "[LaserGCode]")
         const std::string g = gcode(cut_job(), dev);
         CHECK(has_line(g, "M106 S128"));
         CHECK(has_line(g, "M107"));
+        // M106/M107 are not synchronised with the moves in Marlin: each waits for them (M400).
+        const std::vector<std::string> l = lines_of(g);
+        for (size_t i = 0; i < l.size(); ++i)
+            if (l[i].rfind("M106", 0) == 0 || l[i] == "M107") CHECK((i > 0 && l[i - 1] == "M400"));
         CHECK_FALSE(has_line(g, "M4 S128"));
     }
     SECTION("Marlin inline")
@@ -197,7 +203,7 @@ TEST_CASE("Marlin, Smoothie and the origin corner", "[LaserGCode]")
         LaserDevice d;   // GRBL 400 x 400
         d.origin_corner = OriginCorner::RearRight;
         const std::string g = gcode(cut_job(), d);
-        CHECK(has_line(g, "G0 X390 Y390"));
+        CHECK(has_line(g, "G0 X390 Y390 S0"));
         CHECK(has_line(g, "G1 X380 S200 F1200") == false);   // power is 50 %
         CHECK(has_line(g, "G1 X380 S500 F1200"));
         CHECK(to_machine({10, 20}, d, JobSettings::StartFrom::UserOrigin).isApprox(Vec2d(-10, -20)));
@@ -205,7 +211,7 @@ TEST_CASE("Marlin, Smoothie and the origin corner", "[LaserGCode]")
                   .isApprox(Vec2d(10, 20)));
         d.rotary.enabled = true;
         const std::string r = gcode(cut_job(), d);
-        CHECK(has_line(r, "G0 X390 Y10"));
+        CHECK(has_line(r, "G0 X390 Y10 S0"));
     }
     SECTION("current position jobs are wrapped in G92")
     {
@@ -222,8 +228,8 @@ TEST_CASE("Framing traces the job bounds with the laser off", "[LaserGCode]")
 {
     LaserDevice dev;
     const std::string g = frame_gcode(cut_job(), dev, FrameMode::Rect);
-    CHECK(has_line(g, "G0 X10 Y10"));
-    CHECK(has_line(g, "G1 X20 S0 F6000"));
+    CHECK(has_line(g, "G0 X10 Y10 S0"));
+    CHECK(has_line(g, "G1 X20 F6000"));
     CHECK(has_line(g, "G1 Y20"));
     CHECK(has_line(g, "G1 X10"));
     CHECK(has_line(g, "G1 Y10"));
@@ -232,8 +238,24 @@ TEST_CASE("Framing traces the job bounds with the laser off", "[LaserGCode]")
     CHECK(has_line(frame_gcode(cut_job(), dev, FrameMode::Rect), "G1 X20 S10 F6000"));
     // Outline: the hull of the lit moves (a triangle here).
     const std::string o = frame_gcode(cut_job(), LaserDevice{}, FrameMode::Outline);
-    CHECK(has_line(o, "G1 X20 S0 F6000"));
+    CHECK(has_line(o, "G1 X20 F6000"));
     CHECK_FALSE(has_line(o, "G1 X10 Y20"));
+
+    // Returns to the head's start position when known, else to the job-frame origin.
+    const auto before_m5 = [](const std::string& text) {
+        const std::vector<std::string> l = lines_of(text);
+        const auto it = std::find(l.begin(), l.end(), "M5");
+        return it == l.begin() || it == l.end() ? std::string() : *(it - 1);
+    };
+    CHECK(before_m5(frame_gcode(cut_job(), LaserDevice{}, FrameMode::Rect)) == "G0 X0 Y0");
+    CHECK(before_m5(frame_gcode(cut_job(), LaserDevice{}, FrameMode::Rect, Vec2d(5, 7))) == "G0 X5 Y7");
+    LaserDevice rear;
+    rear.origin_corner = OriginCorner::RearLeft;   // the return point is flipped like everything else
+    CHECK(before_m5(frame_gcode(cut_job(), rear, FrameMode::Rect, Vec2d(5, 7))) == "G0 X5 Y393");
+    // Frame power never exceeds 20 %, whatever the profile says.
+    LaserDevice hot;
+    hot.frame_power_pct = 80;
+    CHECK(has_line(frame_gcode(cut_job(), hot, FrameMode::Rect), "G1 X20 S200 F6000"));
 }
 
 TEST_CASE("export_gcode plans and writes a document", "[LaserGCode]")

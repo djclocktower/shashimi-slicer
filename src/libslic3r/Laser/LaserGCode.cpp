@@ -95,7 +95,7 @@ public:
     }
     void footer()
     {
-        if (fan()) line("M107");
+        if (fan()) line("M400\nM107");
         else if (!smoothie()) line("M5");
         on = false;
         if (air) line(dev.air_off_gcode);
@@ -126,14 +126,16 @@ public:
         if (inline_power()) return;
         const std::string sw = s_word(pct);
         if (on && sw == ext_s) return;
-        line(fan() ? "M106 S" + sw : std::string(dynamic() ? "M4" : "M3") + " S" + sw);
+        // Marlin runs M106/M107 as soon as they are parsed, not in step with the moves: M400 first,
+        // or the fan-laser switches on during the travel still in the planner.
+        line(fan() ? "M400\nM106 S" + sw : std::string(dynamic() ? "M4" : "M3") + " S" + sw);
         on    = true;
         ext_s = sw;
     }
     void laser_off()
     {
         if (inline_power() || !on) return;
-        line(fan() ? "M107" : "M5");
+        line(fan() ? "M400\nM107" : "M5");
         on = false;
         ext_s.clear();
     }
@@ -142,9 +144,9 @@ public:
     {
         laser_off();
         if (dev.uses_g0_for_travel) {
-            // GRBL laser mode switches the laser off on G0 only in M4; M3 needs S0 on the move.
-            const bool need_s0 = inline_power() && !smoothie() && !dynamic() && !marlin();
-            move("G0", p, -1, need_s0 ? 0. : -1.);
+            // S0 on every G0: laser mode ($32=1) already keeps G0 dark, but a controller left in
+            // spindle mode ($32=0) would travel at the last S.
+            move("G0", p, -1, inline_power() && !smoothie() ? 0. : -1.);
         } else
             move("G1", p, speed, inline_power() ? 0. : -1.);
     }
@@ -159,7 +161,7 @@ public:
             move("G1", p, speed, pct);
         }
     }
-    void dwell(const Vec2d& p, double ms, double pct)
+    void dwell(const Vec2d& p, double ms, double pct, double speed)
     {
         (void) p;
         // Firing in place: GRBL / Marlin keep the laser on while stopped only in M3.
@@ -171,9 +173,16 @@ public:
             return;
         }
         laser_off();
-        line((fan() ? "M106 S" : "M3 S") + s_word(pct));
+        if (fan()) line("M400\nM106 S" + s_word(pct));
+        else if (marlin()) line("M3 S" + s_word(pct));
+        else {
+            // GRBL laser mode ignores a spindle change in G0 motion mode (the modal state after a
+            // travel): switch to G1 on the same line. G1 needs a feed rate even without motion.
+            if (cur_f.empty()) cur_f = num(std::max(speed, 1.) * 60., 0);
+            line("G1 F" + cur_f + " M3 S" + s_word(pct));
+        }
         line(marlin() ? "G4 P" + num(ms, 0) : "G4 P" + num(ms / 1000., 3));
-        line(fan() ? "M107" : "M5");
+        line(fan() ? "M400\nM107" : "M5");
         armed = false;
         s.clear();
     }
@@ -250,7 +259,7 @@ std::string gcode(const LaserJob& job, const LaserDevice& device, const GCodeOpt
         switch (seg.kind) {
         case Segment::Kind::Travel: w.travel(seg.to, seg.speed_mm_s); break;
         case Segment::Kind::Cut: w.burn(seg.to, seg.speed_mm_s, seg.power_pct); break;
-        case Segment::Kind::Dwell: w.dwell(seg.to, seg.dwell_ms, seg.power_pct); break;
+        case Segment::Kind::Dwell: w.dwell(seg.to, seg.dwell_ms, seg.power_pct, seg.speed_mm_s); break;
         case Segment::Kind::Scan: {
             if (seg.scan < 0 || seg.scan >= int(job.scans.size())) break;
             const ScanLine& sl  = job.scans[seg.scan];
@@ -274,7 +283,7 @@ std::string gcode(const LaserJob& job, const LaserDevice& device, const GCodeOpt
     return w.out.str();
 }
 
-std::string frame_gcode(const LaserJob& job, const LaserDevice& device, FrameMode mode)
+std::string frame_gcode(const LaserJob& job, const LaserDevice& device, FrameMode mode, const std::optional<Vec2d>& return_to)
 {
     if (!job.ok() || !job.bounds.defined || device.type == DeviceType::Ruida) return {};
     std::vector<Vec2d> loop;
@@ -313,14 +322,17 @@ std::string frame_gcode(const LaserJob& job, const LaserDevice& device, FrameMod
     Writer w(device, job.start_from, opts);
     w.header(nullptr);
     const double v = device.travel_speed_mm_s > 0 ? device.travel_speed_mm_s : 50;
-    const bool   lit = device.frame_power_pct > 0;
+    const double fp  = std::min(device.frame_power_pct, 20.);   // framing is never a burn
+    const bool   lit = fp > 0;
     w.travel(loop.front(), v);
     for (size_t i = 1; i <= loop.size(); ++i) {
         const Vec2d& p = loop[i % loop.size()];
         // Laser off: G1 at S0 keeps the head on the traced line at the framing speed.
-        w.burn(p, v, lit ? device.frame_power_pct : 0.);
+        w.burn(p, v, lit ? fp : 0.);
     }
-    w.travel(Vec2d(0, 0), v);   // back to the job-frame origin
+    // Back to where the head started (a CurrentPosition job's origin is that point anyway).
+    const Vec2d back = return_to && finite(*return_to) ? *return_to : Vec2d(0, 0);
+    w.travel(back, v);
     w.footer();
     return w.out.str();
 }

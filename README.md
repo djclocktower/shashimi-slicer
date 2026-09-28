@@ -21,6 +21,19 @@ writes G-code for GRBL, LinuxCNC, Mach3/Mach4, Fanuc-style controls or Marlin. T
 saved in the project's 3MF next to the design. Check every program in simulation and on the
 machine with care before cutting: the CAM tab is new.
 
+**Laser** tab: a LightBurn-style workspace for desktop diode and CO2 lasers. Shapes, text and
+images sit on the bed on 30 colour layers, and each layer carries its cut settings: line, fill,
+fill + line or offset fill, speed, power, passes, interval and scan angle, overscan, kerf, tabs,
+lead-ins and dot mode. Images are engraved with threshold, ordered, Floyd–Steinberg, Jarvis,
+Stucki, Atkinson, newsprint, halftone or grayscale dithering, and can be traced to vectors. SVG,
+DXF, bitmap images and LightBurn `.lbrn2` projects can be imported. Jobs preview with a time
+estimate and are saved as G-code or streamed over USB to GRBL/grblHAL controllers (Marlin and
+Smoothie too) with framing, jogging, pause/stop and a console; a built-in GRBL simulator lets
+you try it all without a machine. A material library holds starting settings, and rotary
+attachments (chuck or roller) are supported. The laser project is saved in the project's 3MF.
+Lasers are dangerous: wear eye protection rated for your laser and never leave one running
+unattended.
+
 ## Credits
 
 Shashimi Slicer builds on the work of:

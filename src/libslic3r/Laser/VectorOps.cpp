@@ -12,6 +12,9 @@ namespace Slic3r::Laser {
 namespace {
 
 constexpr double kArcTolMm = 0.01;
+// Finest fill interval (the Cut Settings minimum): a corrupt or hand-edited 1e-9 would otherwise
+// ask for billions of scan lines or offset rings.
+constexpr double kMinIntervalMm = 0.01;
 
 Polygons closed_polygons(const LaserPaths& paths)
 {
@@ -145,7 +148,8 @@ namespace {
 Polylines hatch_set(const ExPolygons& regions, double interval_mm, double angle_deg, bool bidirectional)
 {
     Polylines out;
-    if (regions.empty() || interval_mm <= 0) return out;
+    if (regions.empty() || !(interval_mm > 0)) return out;
+    interval_mm = std::max(interval_mm, kMinIntervalMm);
     const double a = angle_deg * M_PI / 180.;
     // Rotate the regions by -a so the lines are horizontal, clip, rotate back.
     ExPolygons rot = regions;
@@ -194,7 +198,8 @@ Polylines hatch_fill(const ExPolygons& regions, double interval_mm, double angle
 LaserPaths offset_fill(const ExPolygons& regions, double interval_mm)
 {
     LaserPaths rings;
-    if (interval_mm <= 0) return rings;
+    if (!(interval_mm > 0)) return rings;
+    interval_mm = std::max(interval_mm, kMinIntervalMm);
     // First ring half an interval inside the edge, so the burnt line lands on the outline.
     for (double d = interval_mm / 2;; d += interval_mm) {
         const ExPolygons r = offset_ex(regions, -float(scale_(d)), ClipperLib::jtRound, scale_(kArcTolMm));

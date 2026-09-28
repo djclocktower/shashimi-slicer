@@ -173,6 +173,13 @@ bool LaserDocument::deserialize(const std::string& blob)
             warnings.push_back("Shape \"" + s.name + "\" used a layer that does not exist; it was moved to C00.");
             s.layer = 0;
         }
+        // Every reader indexes gray[] by image_w x image_h: a mismatch is dropped here, once.
+        if (s.type == ShapeType::Image && (s.image_w <= 0 || s.image_h <= 0 || s.gray.size() != size_t(s.image_w) * size_t(s.image_h))) {
+            if (!s.gray.empty() || s.image_w != 0 || s.image_h != 0)
+                warnings.push_back("Image \"" + s.name + "\" was damaged; its pixels were removed.");
+            s.image_w = s.image_h = 0;
+            s.gray.clear();
+        }
     }
     for (int i = 0; i < n; ++i) {
         int& p = shapes[i].parent;
@@ -475,7 +482,7 @@ LaserPaths LaserDocument::flatten(int index, double tol_mm) const
         break;
     }
     case ShapeType::Polygon: {
-        const int n = std::max(3, s.sides);
+        const int n = std::clamp(s.sides, 3, 1000);   // a corrupt file must not ask for 2e9 vertices
         for (int k = 0; k < n; ++k) {   // first vertex at the top (LightBurn)
             const double a = M_PI / 2 + 2 * M_PI * k / n;
             pts.emplace_back(s.rx * std::cos(a), s.ry * std::sin(a));

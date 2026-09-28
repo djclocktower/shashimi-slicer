@@ -134,8 +134,8 @@ std::vector<uint8_t> dither(const std::vector<uint8_t>& gray, int w, int h, Dith
 Raster prepare_image(const LaserShape& image, const LaserLayer& layer, const ProgressFn& progress)
 {
     if (image.type != ShapeType::Image || image.image_w <= 0 || image.image_h <= 0 ||
-        image.gray.size() < size_t(image.image_w) * image.image_h || image.width_mm <= 0 || image.height_mm <= 0 ||
-        layer.image_dpi <= 0)
+        image.gray.size() < size_t(image.image_w) * image.image_h || !(image.width_mm > 0) || !(image.height_mm > 0) ||
+        !(layer.image_dpi > 0) || !image.xform.matrix().allFinite())
         return {};
     auto cancelled = [&](double f) { return progress && progress(f); };
     try {
@@ -152,8 +152,11 @@ Raster prepare_image(const LaserShape& image, const LaserLayer& layer, const Pro
 
         // Resample to about the target pitch first (INTER_AREA shrinks without aliasing), then one
         // affine warp into the scan-aligned raster.
-        const int rw = std::max(1, int(std::lround(W * L.col(0).norm() / pitch)));
-        const int rh = std::max(1, int(std::lround(H * L.col(1).norm() / pitch)));
+        // Sizes checked as doubles first: a huge DPI or scale must not overflow int (> 400 Mpx: refuse
+        // rather than exhaust memory).
+        const double rwd = std::max(1., std::round(W * L.col(0).norm() / pitch)), rhd = std::max(1., std::round(H * L.col(1).norm() / pitch));
+        if (!(rwd * rhd <= 4e8)) return {};
+        const int rw = int(rwd), rh = int(rhd);
         cv::Mat src(image.image_h, image.image_w, CV_8UC1, g.data()), resized;
         const int interp = layer.image_pass_through ? cv::INTER_NEAREST
                          : (double(rw) * rh < double(image.image_w) * image.image_h ? cv::INTER_AREA : cv::INTER_LINEAR);
@@ -172,9 +175,10 @@ Raster prepare_image(const LaserShape& image, const LaserLayer& layer, const Pro
         }
         Raster r;
         r.pixel_mm = r.line_mm = pitch;
-        r.w = std::max(1, int(std::ceil((u1 - u0) / pitch - 1e-6)));
-        r.h = std::max(1, int(std::ceil((v1 - v0) / pitch - 1e-6)));
-        if (double(r.w) * r.h > 4e8) return {};   // > 400 Mpx: refuse rather than exhaust memory
+        const double w_px = std::max(1., std::ceil((u1 - u0) / pitch - 1e-6)), h_px = std::max(1., std::ceil((v1 - v0) / pitch - 1e-6));
+        if (!(w_px * h_px <= 4e8)) return {};
+        r.w = int(w_px);
+        r.h = int(h_px);
         r.to_workspace.linear().col(0) = d * pitch;
         r.to_workspace.linear().col(1) = n * pitch;
         r.to_workspace.translation()   = (u0 + 0.5 * pitch) * d + (v0 + 0.5 * pitch) * n;

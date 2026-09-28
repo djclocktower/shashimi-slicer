@@ -503,6 +503,7 @@ bool GrblSimulator::write(const std::string& bytes)
             }
         }
         else if (c == GrblRt::Reset) {
+            ++s.sh->resets;
             const bool moving = s.state == Impl::S::Run || (s.state == Impl::S::Idle && (Clock::now() < s.busy_until || !s.planner.empty()));
             s.mpos = s.advance();
             s.planner.clear();
@@ -588,6 +589,26 @@ struct GrblStreamer::Impl {
     std::string                 lost_reason;
 
     bool grbl_like() const { return device.type != Laser::DeviceType::Marlin; }
+    std::string laser_off_line() const { return device.marlin_fan_laser ? "M107" : "M5"; }
+    // Marlin has no feed hold: pausing just stops sending, and an M3/M106 laser stays lit once the
+    // buffered moves are done. Queue the laser off (manual lines go ahead of the job) and, on
+    // resume, the last power command the job sent. Call with `mx` held.
+    void marlin_pause_locked()
+    {
+        if (!grbl_like()) manual.push_back(laser_off_line());
+    }
+    void marlin_resume_locked()
+    {
+        if (grbl_like()) return;
+        for (size_t i = std::min(job_next, job.size()); i-- > 0;) {
+            const std::string& l = job[i];
+            if (starts_with(l, "M5") || starts_with(l, "M107")) return;
+            if (starts_with(l, "M3") || starts_with(l, "M4") || starts_with(l, "M106")) {
+                manual.push_back(l);
+                return;
+            }
+        }
+    }
     bool ping_pong() const { return device.type == Laser::DeviceType::Marlin || device.type == Laser::DeviceType::Smoothie; }
 
     void log(ConsoleLine::Dir dir, const std::string& text)
@@ -690,6 +711,7 @@ struct GrblStreamer::Impl {
                 {
                     std::lock_guard<std::mutex> lk(mx);
                     ++prog.lines_acked;
+                    if (!prog.paused) marlin_pause_locked();
                     prog.paused = true;
                 }
                 if (grbl_like()) write(std::string(1, char(GrblRt::FeedHold)));
@@ -837,7 +859,7 @@ struct GrblStreamer::Impl {
                 firing   = false;
             }
             drop_inflight();
-            write("M410\nM5\n");   // Marlin quick stop, laser off
+            write("M410\n" + laser_off_line() + "\n");   // Marlin quick stop, laser off
             finish_job(false, "Stopped.");
         }
     }
@@ -946,8 +968,12 @@ struct GrblStreamer::Impl {
         if (lost_reason.empty() && !tr->is_open())
             lost_reason = "The connection to the laser was lost (cable unplugged or controller powered off?).";
         {
+            // Leaving (disconnect, app closing) with the laser busy: the controller would run on
+            // through its buffer, and an M3 laser stays lit when it stops. GRBL: hold + soft reset
+            // (the reset switches the laser off at once); Marlin: quick stop + laser off.
             std::lock_guard<std::mutex> lk(mx);
-            if (firing && lost_reason.empty()) tr->write("M5\n");
+            if ((firing || prog.running) && lost_reason.empty())
+                tr->write(grbl_like() ? std::string{char(GrblRt::FeedHold), char(GrblRt::Reset)} : "M410\n" + laser_off_line() + "\n");
             firing = false;
         }
         finish_job(false, lost_reason.empty() ? "Disconnected." : lost_reason);
@@ -1073,11 +1099,15 @@ void GrblStreamer::set_origin() { send_line(m_impl->grbl_like() ? "G10 L20 P1 X0
 
 void GrblStreamer::fire(double power_pct, int ms)
 {
-    const double s = std::clamp(power_pct, 0., 100.) * m_impl->device.s_max / 100.;
-    if (!send_line("M3 S" + fmt("%.0f", s))) return;
+    const double s   = std::clamp(power_pct, 0., 100.) * m_impl->device.s_max / 100.;
+    const bool   grbl = m_impl->grbl_like();
+    // GRBL laser mode ($32=1) applies M3 only in a G1/G2/G3 motion mode; G1 needs a feed rate even
+    // without motion. The feed is otherwise unused (no axis words).
+    const std::string on = grbl ? "G1 F" + fmt("%.0f", std::max(1., m_impl->device.travel_speed_mm_s * 60.)) + " M3 S" : "M3 S";
+    if (!send_line(on + fmt("%.0f", s))) return;
     if (ms > 0) {
-        send_line("G4 P" + fmt("%.3f", ms / 1000.));
-        send_line("M5");
+        send_line(grbl ? "G4 P" + fmt("%.3f", ms / 1000.) : "G4 P" + fmt("%.0f", double(ms)));
+        send_line(grbl ? "M5 S0" : "M5");
     } else {
         std::lock_guard<std::mutex> lk(m_impl->mx);
         m_impl->firing = true;
@@ -1090,7 +1120,7 @@ void GrblStreamer::stop_fire()
         std::lock_guard<std::mutex> lk(m_impl->mx);
         m_impl->firing = false;
     }
-    send_line("M5");
+    send_line(m_impl->grbl_like() ? "M5 S0" : "M5");   // S0: the next console G1 cannot relight it
 }
 
 bool GrblStreamer::start(std::vector<std::string> lines, double estimated_s)
@@ -1103,7 +1133,7 @@ bool GrblStreamer::start(std::vector<std::string> lines, double estimated_s)
     {
         std::lock_guard<std::mutex> lk(m_impl->mx);
         const GrblState st = m_impl->status.state;
-        if (m_impl->prog.running || !m_impl->manual.empty()) return false;
+        if (m_impl->prog.running || m_impl->firing || !m_impl->manual.empty()) return false;
         if (m_impl->grbl_like() ? st != GrblState::Idle : (st != GrblState::Idle && st != GrblState::Unknown)) return false;
         m_impl->prog              = JobProgress{};
         m_impl->prog.running      = true;
@@ -1122,6 +1152,7 @@ void GrblStreamer::pause()
     {
         std::lock_guard<std::mutex> lk(m_impl->mx);
         if (!m_impl->prog.running) return;
+        if (!m_impl->prog.paused) m_impl->marlin_pause_locked();
         m_impl->prog.paused = true;
     }
     send_realtime(GrblRt::FeedHold);
@@ -1131,6 +1162,7 @@ void GrblStreamer::resume()
 {
     {
         std::lock_guard<std::mutex> lk(m_impl->mx);
+        if (m_impl->prog.running && m_impl->prog.paused) m_impl->marlin_resume_locked();
         m_impl->prog.paused = false;
     }
     send_realtime(GrblRt::CycleStart);

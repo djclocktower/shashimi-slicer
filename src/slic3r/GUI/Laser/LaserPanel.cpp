@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <cmath>
 #include <future>
 #include <sstream>
@@ -647,7 +648,7 @@ wxWindow* LaserPanel::build_move_page(wxWindow* book)
     auto* r4 = new wxBoxSizer(wxHORIZONTAL);
     m_fire = new wxCheckBox(page, wxID_ANY, _L("Fire"));
     m_fire->SetToolTip(_L("Turns the laser on at low power while checked, to find the beam position. Wear eye protection. "
-                          "GRBL in laser mode ($32=1) may only fire while moving."));
+                          "GRBL needs laser mode ($32=1); without it the controller drives the laser as a spindle."));
     m_fire->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
         if (m_fire->GetValue()) m_streamer.fire(m_fire_power->GetValue(), 0);
         else m_streamer.stop_fire();
@@ -1221,7 +1222,14 @@ void LaserPanel::redo()
 void LaserPanel::load_prefs()
 {
     std::string err;
-    if (!load_devices(app_file("laser_devices.json"), m_devices, &err) || m_devices.empty()) m_devices = default_devices();
+    std::vector<std::string> fixes;
+    if (!load_devices(app_file("laser_devices.json"), m_devices, &err, &fixes) || m_devices.empty()) m_devices = default_devices();
+    // After construction: the console page does not exist yet.
+    if (!fixes.empty())
+        CallAfter([this, fixes] {
+            for (const std::string& f : fixes) on_streamer_console(ConsoleLine{ConsoleLine::Dir::Info, std::chrono::system_clock::now(), f});
+            set_status(wxString::FromUTF8(fixes.front()));
+        });
     if (m_devices.empty()) m_devices.push_back(LaserDevice{});
     if (!load_materials(app_file("laser_materials.json"), m_materials, &err))
         m_materials = default_materials(m_devices.front().source);
@@ -1757,7 +1765,13 @@ void LaserPanel::cmd_frame(bool outline)
 {
     LaserJob job;
     if (!plan_job(job, _L("Frame"))) return;
-    const std::string text = frame_gcode(job, device(), outline ? FrameMode::Outline : FrameMode::Rect);
+    // Return to where the head is now. The frame G-code runs in work coordinates (G54), so the
+    // reported WPos, in the job frame; a CurrentPosition job's origin already is that point.
+    std::optional<Vec2d> back;
+    Vec2d                unused;
+    if (head_position(unused) && job.start_from != JobSettings::StartFrom::CurrentPosition)
+        back = from_machine(Vec2d(m_status.wpos.x(), m_status.wpos.y()), device(), job.start_from);
+    const std::string text = frame_gcode(job, device(), outline ? FrameMode::Outline : FrameMode::Rect, back);
     if (text.empty()) { set_status(_L("Nothing to frame.")); return; }
     if (!m_streamer.is_connected()) {
         show_gcode(this, _L("Frame"), _L("No laser is connected, so here is the framing G-code instead. Connect on the Laser page to run it on the machine."), text);
@@ -1873,7 +1887,7 @@ void LaserPanel::connect_device()
 void LaserPanel::disconnect_device()
 {
     if (m_streamer.progress().running &&
-        wxMessageBox(_L("A job is running. Disconnecting stops streaming but the laser may keep running what it has buffered. Disconnect anyway?"),
+        wxMessageBox(_L("A job is running. Disconnecting stops the job (the controller is reset). Disconnect anyway?"),
                      _L("Disconnect"), wxYES_NO | wxICON_WARNING, this) != wxYES)
         return;
     m_streamer.disconnect();

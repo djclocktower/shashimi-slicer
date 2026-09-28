@@ -5,6 +5,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <limits>
 
 namespace Slic3r::Laser {
 
@@ -224,7 +227,31 @@ std::vector<LaserDevice> default_devices()
     return v;
 }
 
-bool load_devices(const std::string& path, std::vector<LaserDevice>& out, std::string* error)
+std::vector<std::string> validate_device(LaserDevice& d)
+{
+    std::vector<std::string> msgs;
+    const LaserDevice def;
+    auto fix = [&](const char* field, double& v, double lo, double hi, double fallback) {
+        const double old = v;
+        v = std::isfinite(v) && v >= lo ? std::min(v, hi) : fallback;   // NaN / too small -> fallback
+        if (!(v == old)) {   // NaN compares unequal too
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%g", v);
+            msgs.push_back("Device \"" + d.name + "\": " + field + " was out of range; set to " + buf + ".");
+        }
+    };
+    const double inf = std::numeric_limits<double>::infinity();
+    fix("bed_w", d.bed_w, 10, 3000, 10);
+    fix("bed_h", d.bed_h, 10, 3000, 10);
+    fix("s_max", d.s_max, std::numeric_limits<double>::min(), inf, 1000);
+    fix("frame_power_pct", d.frame_power_pct, 0, 20, 0);
+    fix("max_speed_mm_s", d.max_speed_mm_s, std::numeric_limits<double>::min(), inf, def.max_speed_mm_s);
+    fix("travel_speed_mm_s", d.travel_speed_mm_s, std::numeric_limits<double>::min(), inf, def.travel_speed_mm_s);
+    fix("accel_mm_s2", d.accel_mm_s2, std::numeric_limits<double>::min(), inf, def.accel_mm_s2);
+    return msgs;
+}
+
+bool load_devices(const std::string& path, std::vector<LaserDevice>& out, std::string* error, std::vector<std::string>* warnings)
 {
     json j;
     if (!read_json(path, j, error)) return false;
@@ -233,6 +260,8 @@ bool load_devices(const std::string& path, std::vector<LaserDevice>& out, std::s
         for (const json& e : j.at("devices")) {
             LaserDevice d;
             from_json(e, d);
+            for (std::string& w : validate_device(d))
+                if (warnings) warnings->push_back(std::move(w));
             v.push_back(std::move(d));
         }
         out = std::move(v);

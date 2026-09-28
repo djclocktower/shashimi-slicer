@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
+
 #include "libslic3r/Laser/LaserDocument.hpp"
 #include "libslic3r/Laser/Materials.hpp"
 
@@ -121,6 +123,24 @@ TEST_CASE("Laser document round-trips every shape type", "[LaserDoc]")
         // Truncated blob.
         CHECK_FALSE(d.deserialize(blob.substr(0, blob.size() / 2)));
         CHECK(d.empty());
+    }
+    SECTION("an image whose pixels do not match its size is emptied, a huge polygon is capped")
+    {
+        LaserDocument bad;
+        LaserShape    img = make(ShapeType::Image);
+        img.image_w = img.image_h = 1000;   // 1 Mpx claimed, 4 bytes stored
+        img.gray.assign(4, 0);
+        img.width_mm = img.height_mm = 10;
+        bad.add_shape(img);
+        LaserShape poly = make(ShapeType::Polygon);
+        poly.sides      = 2000000000;
+        bad.add_shape(poly);
+        LaserDocument d;
+        REQUIRE(d.deserialize(bad.serialize()));
+        CHECK(d.shapes[0].image_w == 0);
+        CHECK(d.shapes[0].gray.empty());
+        CHECK_FALSE(d.warnings.empty());
+        CHECK(d.flatten(1)[0].pts.size() == 1000);
     }
     SECTION("trailing blocks from a newer build are ignored")
     {
@@ -269,6 +289,29 @@ TEST_CASE("Material library and device profiles round-trip through JSON", "[Lase
     CHECK(dback[0].rotary.enabled);
     CHECK(dback[0].rotary.object_diameter == 77);
     CHECK(dback[4].type == DeviceType::Marlin);
+
+    // Built-in profiles are valid; a hand-edited one is repaired field by field, with a message each.
+    for (LaserDevice dd : devs) CHECK(validate_device(dd).empty());
+    std::vector<LaserDevice> broken(1);
+    broken[0].name              = "Edited";
+    broken[0].bed_w             = 0;
+    broken[0].bed_h             = 5000;
+    broken[0].s_max             = 0;
+    broken[0].frame_power_pct   = 50;
+    broken[0].travel_speed_mm_s = -1;
+    REQUIRE(save_devices(d.string(), broken, &err));
+    std::vector<std::string> fixes;
+    REQUIRE(load_devices(d.string(), dback, &err, &fixes));
+    CHECK(dback[0].bed_w == 10);
+    CHECK(dback[0].bed_h == 3000);
+    CHECK(dback[0].s_max == 1000);
+    CHECK(dback[0].frame_power_pct == 20);
+    CHECK(dback[0].travel_speed_mm_s == LaserDevice{}.travel_speed_mm_s);
+    CHECK(dback[0].max_speed_mm_s == LaserDevice{}.max_speed_mm_s);   // untouched: valid
+    REQUIRE(fixes.size() == 5);
+    for (const char* field : {"bed_w", "bed_h", "s_max", "frame_power_pct", "travel_speed_mm_s"})
+        CHECK(std::any_of(fixes.begin(), fixes.end(), [&](const std::string& m) { return m.find(field) != std::string::npos; }));
+    dback = dv;
 
     // Missing file: false with a message, output untouched.
     CHECK_FALSE(load_devices("/nonexistent/laser_devices.json", dback, &err));

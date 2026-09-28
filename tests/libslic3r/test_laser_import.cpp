@@ -330,6 +330,34 @@ EOF
     }
 }
 
+TEST_CASE("DXF import survives malformed entities", "[LaserImport]")
+{
+    // An ARC with an absurd angle (a += 2 pi loop would hang), a cubic SPLINE with two control
+    // points (de Boor would read past them), a NaN LINE and a block inserting itself ten times.
+    std::string dxf = "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nB\n10\n0\n20\n0\n";
+    for (int i = 0; i < 10; ++i) dxf += "0\nINSERT\n2\nB\n10\n1\n20\n1\n";
+    dxf += "0\nLINE\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n0\nENDSEC\n"
+           "0\nSECTION\n2\nENTITIES\n"
+           "0\nARC\n10\n0\n20\n0\n40\n5\n50\n1e300\n51\n-1e300\n"
+           "0\nARC\n10\n0\n20\n0\n40\n5\n50\n0\n51\ninf\n"
+           "0\nSPLINE\n71\n3\n10\n0\n20\n0\n10\n5\n20\n5\n"
+           "0\nLINE\n10\nnan\n20\n0\n11\n1\n21\n1\n"
+           "0\nINSERT\n2\nB\n10\n0\n20\n0\n0\nENDSEC\n0\nEOF\n";
+    ScopedTemporaryFile f(".dxf");
+    write(f.string(), dxf);
+    const ImportResult r = import_dxf(f.string());
+    REQUIRE(r.ok());
+    CHECK(r.shapes.size() <= 250000);
+    bool capped = false;
+    for (const std::string& w : r.warnings) capped |= w.find("250000") != std::string::npos;
+    CHECK(capped);
+    bool sane = true;   // no NaN / overflowed coordinates
+    for (const LaserShape& s : r.shapes)
+        for (const LaserPath& p : s.paths)
+            for (const Point& pt : p.pts.points) sane &= std::abs(pt.x()) < scale_(1e7) && std::abs(pt.y()) < scale_(1e7);
+    CHECK(sane);
+}
+
 TEST_CASE("Image import: grayscale, alpha on white, size from dpi", "[LaserImport]")
 {
     ScopedTemporaryFile f(".png");
