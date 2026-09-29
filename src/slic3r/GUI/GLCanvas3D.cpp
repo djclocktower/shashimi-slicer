@@ -33,6 +33,7 @@
 #include "Shortcuts.hpp"
 #include "GUI_ObjectList.hpp"
 #include "GUI_Colors.hpp"
+#include "UITheme.hpp"
 #include "Mouse3DController.hpp"
 #include "I18N.hpp"
 #include "NotificationManager.hpp"
@@ -1286,7 +1287,7 @@ bool GLCanvas3D::init()
         return false;
 
     // init dark mode status
-    on_change_color_mode(wxGetApp().app_config->get("dark_color_mode") == "1", false);
+    on_change_color_mode(wxGetApp().dark_mode(), false);
 
     m_show_world_axes = wxGetApp().app_config->get("show_axes") == "true";
     
@@ -1344,6 +1345,15 @@ bool GLCanvas3D::init()
 
 void GLCanvas3D::on_change_color_mode(bool is_dark, bool reinit) {
     m_is_dark = is_dark;
+    // R10 Drafting theme: the drawing area is the black screen, the bed a black sheet ruled by grid
+    // lines in ink-faint, brighter on the selected plate.
+    if (UITheme::is_r10()) {
+        DEFAULT_BG_LIGHT_COLOR_DARK         = UITheme::R10::GROUND;
+        Bed3D::DEFAULT_MODEL_COLOR_DARK     = UITheme::R10::GROUND;
+        PartPlate::UNSELECT_DARK_COLOR      = UITheme::R10::GROUND;
+        PartPlate::LINE_TOP_DARK_COLOR      = UITheme::R10::INK_FAINT;
+        PartPlate::LINE_TOP_SEL_DARK_COLOR  = UITheme::R10::INK_DIM;
+    }
     // Bed color
     m_bed.on_change_color_mode(is_dark);
     // GcodeViewer color

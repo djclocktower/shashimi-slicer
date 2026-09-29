@@ -382,6 +382,10 @@ void AppConfig::set_defaults()
     if (get("show_labels").empty())
         set_bool("show_labels", false);
 
+    // Interface theme, see GUI/UITheme.hpp
+    if (get("ui_theme").empty())
+        set("ui_theme", "default");
+
     if (get("show_overhang").empty())
         set_bool("show_overhang", false);
 

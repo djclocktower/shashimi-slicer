@@ -4,6 +4,7 @@
 #include "../Utils/MacDarkMode.hpp"
 #include "GUI.hpp"
 #include "GUI_Utils.hpp"
+#include "UITheme.hpp"
 
 #include <boost/nowide/cstdio.hpp>
 #include <boost/filesystem.hpp>
@@ -395,6 +396,11 @@ wxBitmap* BitmapCache::load_svg(const std::string &bitmap_name, unsigned target_
         ::nsvgRasterize(rast, image, 0, 0, svg_scale, data.data(), width, height, width * 4);
     ::nsvgDeleteRasterizer(rast);
     ::nsvgDelete(image);
+
+    // R10 Drafting theme: UI icons in the system palette. Recolored icons (filament colors) and
+    // printer thumbnails are pictures of real things and keep their colors.
+    if (dark_mode && new_color.empty() && strstr(bitmap_name.c_str(), "printer_thumbnail") == NULL)
+        UITheme::recolor_icon(data.data(), n_pixels);
 
     return this->insert_raw_rgba(bitmap_key, width, height, data.data(), grayscale);
 }

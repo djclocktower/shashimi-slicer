@@ -540,6 +540,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/TickCode.hpp
     GUI/TroubleshootDialog.cpp
     GUI/TroubleshootDialog.hpp
+    GUI/UITheme.cpp
+    GUI/UITheme.hpp
     GUI/UnsavedChangesDialog.cpp
     GUI/UnsavedChangesDialog.hpp
     GUI/UpdateDialogs.cpp

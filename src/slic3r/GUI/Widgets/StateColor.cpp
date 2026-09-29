@@ -2,6 +2,7 @@
 #include <cmath>
 
 static bool gDarkMode = false;
+static bool gR10Mode  = false;
 
 static bool operator<(wxColour const &l, wxColour const &r) { return l.GetRGBA() < r.GetRGBA(); }
 
@@ -49,6 +50,73 @@ static std::map<wxColour, wxColour> gDarkColors{
     // ORCA
     {"#BFE1DE", "#223C3C"}, // rgb(191, 225, 222)  Dropdown checked item background color > ORCA color with %25 opacity
     {"#E5F0EE", "#283232"}, // rgb(229, 240, 238)  Combo / Dropdown focused background color > ORCA color with %10 opacity
+};
+
+// R10 Drafting theme (see GUI/UITheme.hpp), used in place of gDarkColors. Every light color is sent
+// to one of the VGA palette values below. None of those values is itself a key, so mapping a color
+// that was already mapped leaves it alone. That is why the ground is #010101: #000000 is the key
+// for light-mode text.
+#define R10_GROUND      "#010101" // ground / on-panel black
+#define R10_SYSTEM_TEXT "#55FF55" // system text
+#define R10_HIGHLIGHT   "#AAAAAA" // highlight bar, panel, dimmed text
+#define R10_SHADE       "#555555" // panel shade, disabled marks
+#define R10_RULE        "#FF5555" // frame rules
+#define R10_ATTENTION   "#FFFF55" // focus
+
+static std::map<wxColour, wxColour> gR10Colors{
+    {"#009688", R10_HIGHLIGHT},   // ORCA color
+    {"#1F8EEA", R10_HIGHLIGHT},
+    {"#FF6F00", R10_ATTENTION},   // Secondary color
+    {"#D01B1B", R10_RULE},
+    {"#262E30", R10_SYSTEM_TEXT}, // Button text color | Input Text Color
+    {"#DFDFDF", R10_SHADE},       // Button Background color
+    {"#D4D4D4", R10_SHADE},       // Button Background color on Hover
+    {"#6B6A6A", R10_HIGHLIGHT},   // Button Dimmed text
+    {"#26A69A", R10_HIGHLIGHT},   // ORCA Color Hover
+    {"#6B6B6A", R10_HIGHLIGHT},   // Input box side text
+    {"#2C2C2E", R10_SYSTEM_TEXT},
+    {"#6B6B6B", R10_HIGHLIGHT},   // Disabled Text
+    {"#ACACAC", R10_SHADE},       // Disabled Text on boxes | Dimmed Elements
+    {"#EEEEEE", R10_RULE},        // Separator Line | Title Line Color
+    {"#E8E8E8", R10_SHADE},
+    {"#323A3D", R10_SYSTEM_TEXT}, // Softer text color
+    {"#FFFFFF", R10_GROUND},      // Window background
+    {"#F8F8F8", R10_GROUND},      // Titlebar gradient top
+    {"#F1F1F1", R10_GROUND},      // Titlebar gradient bottom
+    {"#3B4446", R10_GROUND},      // Top Bar / Main tab bar bg color
+    {"#CECECE", R10_SHADE},       // Sidebar wxPanel bg
+    {"#DBFDD5", R10_GROUND},
+    {"#000000", R10_SYSTEM_TEXT}, // Mostly Text color wxBlack
+    {"#F4F4F4", R10_GROUND},
+    {"#DBDBDB", R10_HIGHLIGHT},   // Input/Combo Box Border Color
+    {"#EDFAF2", R10_GROUND},
+    {"#323A3C", R10_SYSTEM_TEXT}, // Text color used on search list
+    {"#303A3C", R10_SYSTEM_TEXT}, // Object Table > Column header text color | StaticBox Border Color
+    {"#FEFFFF", R10_GROUND},      // Side Tabbar bg
+    {"#A6A9AA", R10_SHADE},       // Seperator color
+    {"#363636", R10_SYSTEM_TEXT}, // Parameter Label/Title color | Sidebar tab text
+    {"#F0F0F1", R10_GROUND},      // Disabled element background
+    {"#9E9E9E", R10_HIGHLIGHT},
+    {"#D7E8DE", R10_GROUND},
+    {"#2B3436", R10_SYSTEM_TEXT},
+    {"#ABABAB", R10_HIGHLIGHT},
+    {"#D9D9D9", R10_SHADE},       // Toggle button track color
+    {"#FFFEFE", R10_SYSTEM_TEXT}, // Toggle button thumb color
+    {"#EBF9F0", R10_GROUND},
+    {"#BFE1DE", R10_SHADE},       // Dropdown checked item background color
+    {"#E5F0EE", R10_GROUND},      // Combo / Dropdown focused background color
+    // Accent variants that dark mode leaves as they are
+    {"#00897B", R10_HIGHLIGHT},   // ORCA color pressed
+    {"#009687", R10_HIGHLIGHT},
+    {"#00675B", R10_HIGHLIGHT},   // ORCA color in dark mode
+    {"#008172", R10_HIGHLIGHT},   // ORCA color hover in dark mode
+    {"#007A74", R10_HIGHLIGHT},
+    {"#52C7B8", R10_HIGHLIGHT},   // ORCA color checked hover
+    {"#00AE42", R10_HIGHLIGHT},   // BBL green
+    // White text on the accent, which R10 draws as a gray panel: on-panel black
+    {"#FFFFFE", R10_GROUND},
+    {"#FEFEFE", R10_GROUND},
+    {"#FFFFFD", R10_GROUND},
 };
 
 std::tuple<double, double, double> StateColor::GetLAB(const wxColour& color) {
@@ -185,14 +253,22 @@ std::map<wxColour, wxColour> const & StateColor::GetDarkMap()
     return gDarkColors;
 }
 
+std::map<wxColour, wxColour> const & StateColor::GetR10Map()
+{
+    return gR10Colors;
+}
+
 void StateColor::SetDarkMode(bool dark) { gDarkMode = dark; }
+
+void StateColor::SetR10Mode(bool r10) { gR10Mode = r10; }
 
 inline wxColour darkModeColorFor2(wxColour const &color)
 {
     if (!gDarkMode)
         return color;
-    auto iter = gDarkColors.find(color);
-    if (iter != gDarkColors.end()) return iter->second;
+    auto const &colors = gR10Mode ? gR10Colors : gDarkColors;
+    auto iter = colors.find(color);
+    if (iter != colors.end()) return iter->second;
     return color;
 }
 

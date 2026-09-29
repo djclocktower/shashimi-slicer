@@ -6,6 +6,7 @@
 
 #include "wx/msw/colour.h"
 #include "dark_mode.hpp"
+#include "UITheme.hpp"
 #include "dark_mode/dark_mode.hpp"
 #include "dark_mode/UAHMenuBar.hpp"
 
@@ -71,16 +72,22 @@ namespace NppDarkMode
 
 	COLORREF GetBackgroundColor()
 	{
+		if (IsEnabled() && Slic3r::GUI::UITheme::is_r10())
+			return RGB(0x00, 0x00, 0x00);
 		return IsEnabled() ? RGB(0x2B, 0x2B, 0x2B) : wxSystemSettings::GetColour(wxSYS_COLOUR_MENUBAR).GetRGB();
 	}
 
 	COLORREF GetSofterBackgroundColor()
 	{
+		if (IsEnabled() && Slic3r::GUI::UITheme::is_r10())
+			return RGB(0x55, 0x55, 0x55);
 		return IsEnabled() ? RGB(0x40, 0x40, 0x40) : RGB(0xD9, 0xD9, 0xD9); //RGB(0x78, 0x78, 0x78);
 	}
 
 	COLORREF GetTextColor()
 	{
+		if (IsEnabled() && Slic3r::GUI::UITheme::is_r10())
+			return RGB(0x55, 0xFF, 0x55);
 		return IsEnabled() ? RGB(0xF0, 0xF0, 0xF0) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT).GetRGB();
 	}
 
@@ -91,6 +98,8 @@ namespace NppDarkMode
 
 	COLORREF GetSofterTextColor()
 	{
+		if (IsEnabled() && Slic3r::GUI::UITheme::is_r10())
+			return RGB(0x55, 0xFF, 0x55);
 		return IsEnabled() ? RGB(0xF0, 0xF0, 0xF0) : RGB(0x64, 0x64, 0x64);
 	}
 
@@ -101,6 +110,8 @@ namespace NppDarkMode
 
 	COLORREF GetEdgeColor()
 	{
+		if (Slic3r::GUI::UITheme::is_r10())
+			return RGB(0xFF, 0x55, 0x55);
 		return RGB(0x80, 0x80, 0x80);
 	}
 

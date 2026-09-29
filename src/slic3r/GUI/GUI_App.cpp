@@ -137,6 +137,7 @@
 
 #include "BitmapCache.hpp"
 #include "Notebook.hpp"
+#include "UITheme.hpp"
 #include "Widgets/Label.hpp"
 #include "Widgets/ProgressDialog.hpp"
 
@@ -2932,6 +2933,19 @@ bool GUI_App::on_init_inner()
     wxLog::SetLogLevel(wxLOG_Message);
 #endif
 
+    // The interface theme is fixed for the session: fonts and colors below are built from it.
+    UITheme::init(*app_config);
+    StateColor::SetR10Mode(UITheme::is_r10());
+    if (UITheme::is_r10()) {
+#if defined(__WXGTK20__) || defined(__WXGTK3__)
+        // R10 forces the dark color mode; ask GTK for the dark variant so native controls match.
+        g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", TRUE, NULL);
+#endif
+#ifdef __APPLE__
+        mac_set_dark_appearance();
+#endif
+    }
+
     ::Label::initSysFont();
 
     // Register wxInspector plugins for Orca custom controls
@@ -4155,6 +4169,9 @@ void GUI_App::select_machine(const std::string& agent_id)
 
 bool GUI_App::dark_mode()
 {
+    // The R10 Drafting theme is a black screen on every platform.
+    if (UITheme::is_r10())
+        return true;
 #ifdef SUPPORT_DARK_MODE
 #if __APPLE__
     // The check for dark mode returns false positive on 10.12 and 10.13,
@@ -4207,6 +4224,19 @@ void GUI_App::init_label_colours()
 #endif
     m_color_window_default          = is_dark_mode ? wxColour(43, 43, 43)   : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
     StateColor::SetDarkMode(is_dark_mode);
+
+    if (UITheme::is_r10()) {
+        // Final R10 palette values, see gR10Colors in StateColor.cpp
+        m_color_label_modified          = wxColour("#FFFF55");
+        m_color_label_sys               = wxColour("#55FF55");
+        m_color_label_default           = wxColour("#55FF55");
+        m_color_highlight_label_default = wxColour("#55FF55");
+        m_color_highlight_default       = wxColour("#555555");
+        m_color_hovered_btn_label       = wxColour("#555555");
+        m_color_default_btn_label       = wxColour("#55FF55");
+        m_color_selected_btn_bg         = wxColour("#AAAAAA");
+        m_color_window_default          = wxColour("#010101");
+    }
 }
 
 void GUI_App::update_label_colours_from_appconfig()

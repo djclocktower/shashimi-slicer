@@ -1,0 +1,95 @@
+/* R10 Drafting tokens. Default theme: screen. Add data-theme="plot" on any element for paper. */
+@font-face{font-family:"IBM VGA 8x16";src:url("fonts/WebPlus_IBM_VGA_8x16.woff");font-weight:400;font-display:block}
+@font-face{font-family:"Plotter Simplex";src:url("fonts/PlotterSimplex.woff2");font-weight:400;font-display:block}
+@font-face{font-family:"Plotter Duplex";src:url("fonts/PlotterDuplex.woff2");font-weight:400;font-display:block}
+:root, [data-theme="screen"] {
+  --ground: #000000;
+  --ink: #ffffff;
+  --system-text: #55ff55;
+  --ink-dim: #aaaaaa;
+  --ink-faint: #555555;
+  --rule: #ff5555;
+  --highlight: #aaaaaa;
+  --on-highlight: #555555;
+  --panel: #aaaaaa;
+  --on-panel: #000000;
+  --panel-shade: #555555;
+  --on-panel-shade: #ffffff;
+  --field: #000000;
+  --on-field: #ffffff;
+  --focus: #ffff55;
+  --focus-on-panel: #000000;
+  --aci-1: #ff5555;
+  --aci-2: #ffff55;
+  --aci-3: #55ff55;
+  --aci-4: #55ffff;
+  --aci-5: #5555ff;
+  --aci-6: #ff55ff;
+  --aci-7: var(--ink);
+  --aci-8: #555555;
+  --vga-blue: #0000aa;
+  --on-vga-blue: #ffffff;
+}
+[data-theme="plot"] {
+  --ground: #f3f0e6;
+  --ink: #111111;
+  --system-text: #111111;
+  --ink-dim: #4d4a43;
+  --ink-faint: #a39e90;
+  --rule: #111111;
+  --highlight: #111111;
+  --on-highlight: #f3f0e6;
+  --panel: #e2ddcf;
+  --on-panel: #111111;
+  --panel-shade: #5e5a50;
+  --on-panel-shade: #ffffff;
+  --field: #ffffff;
+  --on-field: #111111;
+  --focus: #1f33c9;
+  --focus-on-panel: #111111;
+  --aci-1: #c00000;
+  --aci-2: #6f5500;
+  --aci-3: #146b14;
+  --aci-4: #00646e;
+  --aci-5: #1f33c9;
+  --aci-6: #921489;
+  --aci-7: var(--ink);
+  --aci-8: #77736a;
+  --vga-blue: #0000aa;
+  --on-vga-blue: #ffffff;
+}
+:root {
+  --cell-x: 8px;
+  --cell-y: 16px;
+  --half-cell: 4px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --grid-pitch: 16px;
+  --radius-0: 0;
+  --stroke-hair: 1px;
+  --stroke-pen-thin: 1.5px;
+  --stroke-pen-bold: 2.5px;
+  --lt-continuous: none;
+  --lt-dashed: 8 4;
+  --lt-hidden: 4 2;
+  --lt-center: 20 4 4 4;
+  --lt-phantom: 20 4 4 4 4 4;
+  --lt-dot: 0 4;
+  --lt-dashdot: 8 4 0 4;
+  --screen-menu-width: 68px;
+  --status-line-height: 16px;
+  --command-area-height: 49px;
+  --pickbox: 8px;
+  --grip: 6px;
+  --font-screen: "IBM VGA 8x16", "Courier New", monospace;
+  --font-simplex: "Plotter Simplex", "Courier New", monospace;
+  --font-duplex: "Plotter Duplex", "Plotter Simplex", monospace;
+}
+.screen-text { font-family: var(--font-screen); font-size: 16px; line-height: 16px; font-weight: 400; }
+.screen-text-2x { font-family: var(--font-screen); font-size: 32px; line-height: 32px; font-weight: 400; }
+.screen-text-3x { font-family: var(--font-screen); font-size: 48px; line-height: 48px; font-weight: 400; }
+.drawing-title { font-family: var(--font-duplex); font-size: 32px; line-height: 38px; font-weight: 400; }
+.drawing-label { font-family: var(--font-simplex); font-size: 20px; line-height: 26px; font-weight: 400; }
+.drawing-note { font-family: var(--font-simplex); font-size: 16px; line-height: 22px; font-weight: 400; }
+.dimension { font-family: var(--font-simplex); font-size: 14px; line-height: 16px; font-weight: 400; }

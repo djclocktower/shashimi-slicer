@@ -1,0 +1,92 @@
+/* R10 Drafting — component styles. Every size is a character cell (8x16) or a token. */
+.r10, .r10 * { box-sizing: border-box; border-radius: var(--radius-0); }
+.r10 { font-family: var(--font-screen); font-size: 16px; line-height: 16px; color: var(--system-text); background: var(--ground);
+  -webkit-font-smoothing: none; -moz-osx-font-smoothing: grayscale; font-smooth: never; text-rendering: optimizeSpeed; }
+.r10 button, .r10 input { font: inherit; color: inherit; }
+.r10-dim { color: var(--ink-dim); }
+
+/* Status line */
+.r10-status { display: flex; height: var(--status-line-height); white-space: pre; background: var(--ground); overflow: hidden; }
+.r10-status > span:first-child { flex: 0 0 50%; } /* coordinates start at column 40 of 80 */
+.r10-layer { display: inline-flex; gap: var(--cell-x); align-items: center; }
+.r10-chip { display: inline-block; width: 16px; height: 12px; border: 1px solid var(--rule); vertical-align: -1px; }
+
+/* Screen menu (right side) */
+.r10-smenu { width: var(--screen-menu-width); border-left: 1px solid var(--rule); padding-left: 3px; background: var(--ground); display: flex; flex-direction: column; white-space: pre; overflow: hidden; }
+.r10-smenu-title, .r10-smenu-sep { height: var(--cell-y); }
+.r10-smenu button { all: unset; display: block; height: var(--cell-y); width: 64px; cursor: default; color: var(--system-text); font-family: var(--font-screen); }
+.r10-smenu button.is-dim { color: var(--ink-dim); }
+.r10-smenu button.is-active, .r10-smenu button:hover { background: var(--highlight); color: var(--on-highlight); }
+.r10-smenu button:focus-visible { outline: 1px solid var(--focus); outline-offset: -2px; }
+
+/* Command line */
+.r10-cmd { border-top: 1px solid var(--rule); padding: 0; white-space: pre; background: var(--ground); }
+.r10-cmd > div { height: var(--cell-y); overflow: hidden; }
+.r10-cmd .r10-hist { color: var(--system-text); }
+.r10-cursor { display: inline-block; width: var(--cell-x); height: 2px; background: var(--focus); vertical-align: -1px; animation: r10-blink 1.06s steps(1) infinite; }
+@keyframes r10-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .r10-cursor { animation: none; } }
+
+/* Menu bar + pull-down */
+.r10-mbar { display: flex; height: var(--status-line-height); border-bottom: 1px solid var(--rule); white-space: pre; background: var(--ground); }
+.r10-mbar > span { padding: 0 var(--cell-x); }
+.r10-mbar > span.is-active { background: var(--highlight); color: var(--on-highlight); }
+.r10-pull { display: inline-flex; flex-direction: column; border: 1px solid var(--rule); background: var(--ground); padding: 4px 0; min-width: 160px; white-space: pre; }
+.r10-pull > div { height: var(--cell-y); padding: 0 var(--cell-x) 0 calc(var(--cell-x) * 2); display: flex; }
+.r10-pull > div > .r10-key { margin-left: auto; padding-left: calc(var(--cell-x) * 2); }
+.r10-pull > div.is-active { background: var(--highlight); color: var(--on-highlight); }
+.r10-pull > div.is-disabled { color: var(--ink-faint); }
+.r10-pull > div.is-checked::before { content: "\221A"; margin-left: calc(var(--cell-x) * -1.5); width: calc(var(--cell-x) * 1.5); }
+.r10-pull > hr { border: 0; border-top: 1px solid var(--rule); margin: 3px 0 4px; }
+
+/* Dialog */
+.r10-dlg { display: inline-block; background: var(--panel); color: var(--on-panel); border: 1px solid var(--on-panel); }
+.r10-dlg-title { background: var(--panel-shade); color: var(--on-panel-shade); height: calc(var(--cell-y) + 8px); padding: 4px var(--cell-x); text-align: center; white-space: pre; }
+.r10-dlg-body { padding: var(--space-2); display: flex; flex-direction: column; gap: var(--cell-y); }
+.r10-row { display: flex; gap: var(--space-2); align-items: center; }
+.r10-row.is-end { justify-content: center; }
+.r10-btn { all: unset; font-family: var(--font-screen); display: inline-block; min-width: 80px; height: calc(var(--cell-y) + 8px); padding: 4px var(--cell-x); text-align: center; white-space: pre;
+  color: var(--on-panel); background: var(--panel); border: 1px solid var(--on-panel); position: relative; cursor: default; }
+.r10-btn.is-default { border-width: 2px; padding: 3px calc(var(--cell-x) - 1px); }
+.r10-btn:active, .r10-btn.is-pressed { background: var(--panel-shade); color: var(--on-panel-shade); }
+.r10-btn:disabled, .r10-btn.is-disabled { color: var(--panel-shade); border-color: var(--panel-shade); }
+.r10-btn:focus-visible, .r10-btn.is-focus { outline: 1px dotted var(--focus-on-panel); outline-offset: -5px; }
+.r10-edit { display: inline-flex; align-items: center; gap: var(--cell-x); white-space: pre; }
+.r10-edit input { all: unset; font-family: var(--font-screen); background: var(--field); color: var(--on-field); height: calc(var(--cell-y) + 4px); padding: 2px 4px; border: 1px solid var(--on-panel); caret-color: var(--focus); }
+.r10-edit input:focus-visible { outline: 1px solid var(--focus); outline-offset: -3px; }
+.r10-toggle { all: unset; display: inline-flex; gap: var(--cell-x); align-items: center; white-space: pre; cursor: default; font-family: var(--font-screen); color: var(--on-panel); }
+.r10-toggle .r10-box { width: 16px; height: 16px; border: 1px solid var(--on-panel); background: var(--field); color: var(--on-field); display: inline-flex; align-items: center; justify-content: center; }
+.r10-toggle:focus-visible { outline: 1px dotted var(--focus-on-panel); outline-offset: 2px; }
+.r10-list { background: var(--field); color: var(--on-field); border: 1px solid var(--on-panel); white-space: pre; overflow: hidden; }
+.r10-list > div { height: var(--cell-y); padding: 0 4px; }
+.r10-list > div.is-active { background: var(--highlight); color: var(--on-highlight); }
+
+/* Icon menu */
+.r10-imenu { display: inline-block; border: 1px solid var(--rule); background: var(--ground); }
+.r10-imenu-title { text-align: center; height: calc(var(--cell-y) + 8px); padding: 4px; border-bottom: 1px solid var(--rule); white-space: pre; }
+.r10-imenu-grid { display: grid; gap: 1px; background: var(--rule); }
+.r10-imenu-grid > div { background: var(--ground); padding: 8px; display: flex; flex-direction: column; align-items: center; gap: 4px; white-space: pre; }
+.r10-imenu-grid > div.is-active { outline: 2px solid var(--focus); outline-offset: -3px; }
+.r10-imenu svg { display: block; border: 1px solid var(--ink-faint); }
+
+/* Viewport (drawing area) */
+.r10-vp { display: block; background: var(--ground); }
+.r10-vp .ent { fill: none; stroke-width: var(--stroke-hair); vector-effect: non-scaling-stroke; }
+.r10-vp text { font-family: var(--font-simplex); }
+
+/* Title block */
+.r10-tb { display: inline-grid; grid-template-columns: 1fr auto auto; border: var(--stroke-pen-bold) solid var(--ink); font-family: var(--font-simplex); font-size: 13px; line-height: 16px; text-transform: uppercase; color: var(--ink); background: var(--ground); }
+.r10-tb > div { border: 0.75px solid var(--ink); padding: 4px 8px; }
+.r10-tb small { display: block; font-size: 10px; color: var(--ink-dim); }
+.r10-tb .r10-tb-title { grid-row: span 2; font-family: var(--font-duplex); font-size: 24px; line-height: 28px; display: flex; flex-direction: column; justify-content: center; }
+
+/* Workspace */
+.r10-ws { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto 1fr auto; overflow: hidden; }
+.r10-ws > .r10-status, .r10-ws > .r10-mbar { grid-column: 1 / -1; }
+.r10-ws > .r10-cmd { grid-column: 1 / -1; }
+.r10-ws-draw { position: relative; overflow: hidden; min-height: 0; }
+.r10-ws-draw > .r10-pull { position: absolute; top: 0; }
+
+/* Text-mode menu (main menu, configuration) */
+.r10-tmenu { color: var(--system-text); white-space: pre; padding: 0; }
+.r10-tmenu > div { height: var(--cell-y); }
