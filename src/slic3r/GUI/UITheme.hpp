@@ -48,9 +48,11 @@ inline const ColorRGBA INK_FAINT   = vga(0x55, 0x55, 0x55); // grid marks, under
 inline const ColorRGBA RULE        = vga(0xFF, 0x55, 0x55); // 1px frame rules
 } // namespace R10
 
-// Recolor a rasterized UI icon to the R10 palette in place: neutral line work becomes system-text
-// green, dark fills become ground, the accent becomes white ink. Saturated colors that carry meaning
-// (warnings, errors, axis colors) are left alone. No-op unless the R10 theme is active.
+// Recolor a rasterized UI icon to the R10 palette in place: light neutral line work becomes
+// system-text green, mid grays panel shade, dark fills ground, the accent white ink. An icon mostly
+// filled with the accent (a selected state) becomes the gray highlight bar with dark-gray lines.
+// Saturated colors that carry meaning (warnings, errors, axis colors) are left alone.
+// No-op unless the R10 theme is active.
 void recolor_icon(unsigned char *rgba, size_t n_pixels);
 
 } // namespace UITheme

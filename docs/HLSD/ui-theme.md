@@ -54,8 +54,9 @@ idempotence.
 ### Icons
 
 `UITheme::recolor_icon()` works on rasterized pixels rather than SVG source, so it covers
-every icon without a list of their colors: neutral line work becomes system text, dark
-fills become ground and the accent becomes white. Saturated colors are left alone, since
+every icon without a list of their colors. Neutral tones go to three steps: light line
+work becomes system text, mid-gray button fills panel shade and dark fills ground, so
+lines stay readable over the fills they sit on. The accent becomes white. Saturated colors are left alone, since
 they carry meaning (warnings, errors, axes). Filament-colored icons and printer
 thumbnails are pictures of real things and are not recolored. Bed textures are not
 either; in `GLTexture` only `_dark.svg` UI icons are.

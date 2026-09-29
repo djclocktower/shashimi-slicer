@@ -95,27 +95,53 @@ TEST_CASE("Leaving R10 mode off keeps the regular dark map", "[UITheme]")
     StateColor::SetDarkMode(false);
 }
 
-TEST_CASE("R10 recolors neutral icon line work to system text and keeps saturated colors", "[UITheme]")
+TEST_CASE("R10 recolors neutral icon tones to the palette and keeps saturated colors", "[UITheme]")
 {
-    // gray line, dark fill, accent teal, warning orange, transparent pixel
-    unsigned char pixels[] = {0xB6, 0xB6, 0xB6, 0xFF, 0x2D, 0x2D, 0x31, 0xFF, 0x00, 0x96, 0x88, 0xFF,
-                              0xFF, 0x6F, 0x00, 0xFF, 0x80, 0x80, 0x80, 0x00};
+    // light gray line, mid-gray button fill, dark fill, accent teal, warning orange, transparent pixel
+    unsigned char pixels[] = {0xB6, 0xB6, 0xB6, 0xFF, 0x54, 0x54, 0x5A, 0xFF, 0x2D, 0x2D, 0x31, 0xFF,
+                              0x00, 0x96, 0x88, 0xFF, 0xFF, 0x6F, 0x00, 0xFF, 0x80, 0x80, 0x80, 0x00};
 
     init_theme(GUI::UITheme::THEME_R10, "en");
-    GUI::UITheme::recolor_icon(pixels, 5);
+    GUI::UITheme::recolor_icon(pixels, 6);
     init_theme(GUI::UITheme::THEME_DEFAULT, "en");
 
+    // light line work: system text
     CHECK(pixels[0] == 0x55);
     CHECK(pixels[1] == 0xFF);
     CHECK(pixels[2] == 0x55);
-    CHECK(pixels[4] == 0x00);
-    CHECK(pixels[6] == 0x00);
-    CHECK(pixels[8] == 0xFF);
-    CHECK(pixels[9] == 0xFF);
+    // mid gray: panel shade, so light lines drawn over it stay readable
+    CHECK(pixels[4] == 0x55);
+    CHECK(pixels[5] == 0x55);
+    CHECK(pixels[6] == 0x55);
+    // dark fill: ground
+    CHECK(pixels[8] == 0x00);
+    CHECK(pixels[10] == 0x00);
+    // accent: white ink
     CHECK(pixels[12] == 0xFF);
-    CHECK(pixels[13] == 0x6F);
-    CHECK(pixels[16] == 0x80);
-    CHECK(pixels[19] == 0x00);
+    CHECK(pixels[13] == 0xFF);
+    // warning orange untouched
+    CHECK(pixels[16] == 0xFF);
+    CHECK(pixels[17] == 0x6F);
+    // transparent pixel untouched
+    CHECK(pixels[20] == 0x80);
+    CHECK(pixels[23] == 0x00);
+}
+
+TEST_CASE("R10 draws an icon filled with the accent as the gray highlight bar", "[UITheme]")
+{
+    // three accent pixels and one light line pixel: a selected-state icon
+    unsigned char pixels[] = {0x00, 0x96, 0x88, 0xFF, 0x00, 0x96, 0x88, 0xFF, 0x00, 0x96, 0x88, 0xFF, 0xC4, 0xC4, 0xC4, 0xFF};
+
+    init_theme(GUI::UITheme::THEME_R10, "en");
+    GUI::UITheme::recolor_icon(pixels, 4);
+    init_theme(GUI::UITheme::THEME_DEFAULT, "en");
+
+    // accent fill: highlight gray
+    CHECK(pixels[0] == 0xAA);
+    CHECK(pixels[1] == 0xAA);
+    // line work on it: on-highlight dark gray
+    CHECK(pixels[12] == 0x55);
+    CHECK(pixels[13] == 0x55);
 }
 
 TEST_CASE("The default theme leaves icons untouched", "[UITheme]")
