@@ -1661,6 +1661,13 @@ void PreferencesDialog::create_items()
            "The theme changes on the next start."));
     g_sizer->Add(item_ui_theme);
 
+    auto item_vhs_filter       = create_item_checkbox(_L("VHS filter"),
+        _L("Plays the 3D view back like a worn VHS tape: smeared color that trails to the right, scan lines, "
+           "tape noise and a tracking band. Works with any interface theme.\n"
+           "Takes effect immediately."),
+        SETTING_VHS_FILTER);
+    g_sizer->Add(item_vhs_filter);
+
 #ifdef _WIN32
     auto item_darkmode         = create_item_darkmode(_L("Enable dark Mode"), "", "dark_color_mode");
     g_sizer->Add(item_darkmode);

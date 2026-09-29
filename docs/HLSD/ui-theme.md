@@ -78,3 +78,23 @@ Vietnamese the theme keeps its colors but uses the regular fonts, since the bitm
 has no glyphs for them (`UITheme::use_r10_font()`). In ImGui the regular font is merged
 behind the VGA face for the symbols it lacks. The face is bold-less by design, so bold
 requests get the regular weight.
+
+## VHS filter
+
+A separate switch, `Preferences > General > VHS filter` (`vhs_filter`), plays the 3D view
+back like a worn VHS tape. It does not depend on the interface theme and works with any
+of them.
+
+It is a post-processing pass, `GLCanvas3D::_render_vhs_pass()` with the `vhs` shader
+(`resources/shaders/{110,140}/vhs.fs`), run over the finished frame after the ImGui
+overlays and before the buffer swap. So toolbars, the legend and notifications are
+filtered along with the scene, while the cached scene the overlay-only frames reuse is
+captured before it and stays clean. The shader works in YIQ, as the tape does: luma keeps
+its detail with a little sharpening ring, while chroma is averaged over several pixels and
+trails to the right. On top come lifted warm blacks, scan lines one logical pixel high,
+grain, rare dropout streaks and a tracking band that rolls up the screen. The noise and
+the band advance with each redrawn frame rather than on a timer, so an idle canvas stays
+idle. The setting is read every frame, so it takes effect at once.
+
+Only what OpenGL draws is filtered. The sidebar, dialogs and other native wxWidgets
+windows are composited by the operating system and have no pass to hook into.

@@ -50,6 +50,8 @@ std::pair<bool, std::string> GLShadersManager::init()
     valid &= append_shader("flat_texture", { prefix + "flat_texture.vs", prefix + "flat_texture.fs" });
     // used to apply post-processing antialiasing in screen space
     valid &= append_shader("fxaa", { prefix + "fxaa.vs", prefix + "fxaa.fs" });
+    // used to play the whole canvas back like a VHS tape (Preferences > VHS filter)
+    valid &= append_shader("vhs", { prefix + "vhs.vs", prefix + "vhs.fs" });
     // used to apply screen-space ambient occlusion in post process
     valid &= append_shader("ssao", { prefix + "ssao.vs", prefix + "ssao.fs" });
     // used to render 3D scene background
