@@ -1,5 +1,6 @@
 #include "StaticBox.hpp"
 #include "../GUI.hpp"
+#include "../UITheme.hpp"
 #include <wx/dcclient.h>
 #include <wx/dcgraph.h>
 
@@ -169,7 +170,7 @@ void StaticBox::paintEvent(wxPaintEvent& evt)
 void StaticBox::render(wxDC& dc)
 {
 #ifdef __WXMSW__
-    if (radius == 0) {
+    if (radius == 0 || Slic3r::GUI::UITheme::is_r10()) {
         doRender(dc);
         return;
     }
@@ -228,7 +229,8 @@ void StaticBox::doRender(wxDC& dc)
                 dc.SetBrush(wxBrush(background_color.colorForStates(states)));
             else
                 dc.SetBrush(wxBrush(GetBackgroundColour()));
-            if (radius == 0) {
+            // R10 Drafting theme: every corner is square
+            if (radius == 0 || Slic3r::GUI::UITheme::is_r10()) {
                 dc.DrawRectangle(rc);
             }
             else {

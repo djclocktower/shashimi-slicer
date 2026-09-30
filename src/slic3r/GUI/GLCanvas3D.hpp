@@ -793,6 +793,8 @@ public:
     GLModel m_background;
     unsigned int m_fxaa_texture_id{ 0 };
     std::array<unsigned int, 2> m_fxaa_texture_size{ 0, 0 };
+    unsigned int m_vhs_texture_id{ 0 };
+    std::array<unsigned int, 2> m_vhs_texture_size{ 0, 0 };
     unsigned int m_ssao_color_texture_id{ 0 };
     unsigned int m_ssao_depth_texture_id{ 0 };
     std::array<unsigned int, 2> m_ssao_texture_size{ { 0, 0 } };
@@ -1334,6 +1336,7 @@ private:
     void _picking_pass();
     void _rectangular_selection_picking_pass();
     bool _is_fxaa_enabled() const;
+    bool _is_vhs_filter_enabled() const;
     bool _is_realistic_view_enabled() const;
     bool _is_ssao_enabled() const;
     int _get_effective_fps_cap() const;
@@ -1343,6 +1346,8 @@ private:
     bool _is_frame_skipping_enabled() const;
     void _render_fps_overlay(int fps) const;
     void _render_fxaa_pass(unsigned int width, unsigned int height);
+    // Over the finished frame, overlays included, just before the swap.
+    void _render_vhs_pass(unsigned int width, unsigned int height);
     void _render_ssao_pass(unsigned int width, unsigned int height);
     // scene_dirty is false only for a frame that its requester knows to be overlay-only.
     void _render_frame(bool scene_dirty, bool only_init = false);

@@ -6,6 +6,7 @@
 #include "Plater.hpp"
 #include "GLCanvas3D.hpp" // ORCA: for live preview refresh when toggling "Dim lower layers"
 #include "MsgDialog.hpp"
+#include "UITheme.hpp"
 #include "I18N.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Format/DRC.hpp"
@@ -533,6 +534,28 @@ wxBoxSizer *PreferencesDialog::create_item_language_combobox(wxString title, wxS
     });
 
     return m_sizer;
+}
+
+wxBoxSizer *PreferencesDialog::create_item_ui_theme_combobox(wxString title, wxString tooltip)
+{
+    const std::vector<wxString>    names  = {_L("Default"), _L("R10 Drafting (1980s CAD)")};
+    const std::vector<std::string> values = {UITheme::THEME_DEFAULT, UITheme::THEME_R10};
+
+    const unsigned int current_index = app_config->get(UITheme::CONFIG_KEY) == UITheme::THEME_R10 ? 1 : 0;
+    auto [sizer, combobox] = create_item_combobox_base(title, tooltip, UITheme::CONFIG_KEY, names, current_index);
+
+    // The theme is read once at startup (UITheme::init), so a change applies on the next launch.
+    combobox->GetDropDown().Bind(wxEVT_COMBOBOX, [this, values](wxCommandEvent &e) {
+        const std::string &value = values[e.GetSelection()];
+        if (value != app_config->get(UITheme::CONFIG_KEY)) {
+            app_config->set(UITheme::CONFIG_KEY, value);
+            MessageDialog(this, _L("The interface theme changes the next time the application starts."), _L("Interface theme"),
+                          wxICON_INFORMATION | wxOK).ShowModal();
+        }
+        e.Skip();
+    });
+
+    return sizer;
 }
 
 wxBoxSizer *PreferencesDialog::create_item_region_combobox(wxString title, wxString tooltip)
@@ -1632,9 +1655,25 @@ void PreferencesDialog::create_items()
     auto item_default_page     = create_item_combobox(_L("Default page"), _L("Set the page opened on startup."), "default_page", DefaultPage);
     g_sizer->Add(item_default_page);
 
+    auto item_ui_theme         = create_item_ui_theme_combobox(_L("Interface theme"),
+        _L("R10 Drafting draws the whole interface like a 1980s CAD workstation: a black screen, green VGA system text, "
+           "gray highlight bars, red frame rules and square corners. It always uses dark mode.\n"
+           "The theme changes on the next start."));
+    g_sizer->Add(item_ui_theme);
+
+    auto item_vhs_filter       = create_item_checkbox(_L("VHS filter"),
+        _L("Plays the 3D view back like a worn VHS tape: smeared color that trails to the right, scan lines, "
+           "tape noise and a tracking band. Works with any interface theme.\n"
+           "Takes effect immediately."),
+        SETTING_VHS_FILTER);
+    g_sizer->Add(item_vhs_filter);
+
 #ifdef _WIN32
     auto item_darkmode         = create_item_darkmode(_L("Enable dark Mode"), "", "dark_color_mode");
     g_sizer->Add(item_darkmode);
+    // R10 Drafting is always dark
+    if (UITheme::is_r10())
+        m_dark_mode_ckeckbox->Disable();
 #endif
 
     auto item_single_instance  = create_item_checkbox(_L("Allow only one OrcaSlicer instance"),

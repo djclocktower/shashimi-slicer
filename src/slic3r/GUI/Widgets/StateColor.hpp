@@ -31,8 +31,11 @@ public:
     static double LAB_Delta_E(const wxColour& c1, const wxColour& c2);
 
     static void SetDarkMode(bool dark);
+    // R10 Drafting theme: dark mode maps light colors to the R10 palette instead (see GUI/UITheme.hpp)
+    static void SetR10Mode(bool r10);
 
     static std::map<wxColour, wxColour> const & GetDarkMap();
+    static std::map<wxColour, wxColour> const & GetR10Map();
     static wxColour darkModeColorFor(wxColour const &color);
     static wxColour lightModeColorFor(wxColour const &color);
 

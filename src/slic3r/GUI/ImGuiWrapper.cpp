@@ -36,6 +36,7 @@
 #include "I18N.hpp"
 #include "Search.hpp"
 #include "BitmapCache.hpp"
+#include "UITheme.hpp"
 #include "GUI_App.hpp"
 
 #include "../Utils/MacDarkMode.hpp"
@@ -2581,6 +2582,10 @@ std::vector<unsigned char> ImGuiWrapper::load_svg(const std::string& bitmap_name
 //BBS
 static bool m_is_dark_mode = false;
 
+// R10 Drafting theme: square corners and 1px frames on the shared window styles below.
+static float r10_rounding(float rounding) { return UITheme::is_r10() ? 0.f : rounding; }
+static float r10_border(float border, float scale) { return UITheme::is_r10() ? scale : border; }
+
 void ImGuiWrapper::on_change_color_mode(bool is_dark)
 {
     m_is_dark_mode = is_dark;
@@ -2591,9 +2596,9 @@ void ImGuiWrapper::push_toolbar_style(const float scale)
     if (m_is_dark_mode) {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 10.0f) * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, r10_rounding(3.0f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, r10_border(0.0f, scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r10_rounding(2.0f) * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 10.0f) * scale);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.88f));                                        // 1
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGuiWrapper::COL_WINDOW_BG_DARK);                                   // 2
@@ -2615,9 +2620,9 @@ void ImGuiWrapper::push_toolbar_style(const float scale)
     else {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 10.0f) * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, r10_rounding(3.0f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, r10_border(0.0f, scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r10_rounding(2.0f) * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 10.0f) * scale);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(50 / 255.0f, 58 / 255.0f, 61 / 255.0f, 1.00f));       // 1
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGuiWrapper::COL_WINDOW_BG);          // 2
@@ -2650,8 +2655,8 @@ void ImGuiWrapper::push_menu_style(const float scale)
     if (m_is_dark_mode) {
         ImGuiWrapper::push_toolbar_style(scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f) * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 4.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, r10_rounding(4.0f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, r10_border(0.0f, scale));
         ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGuiWrapper::COL_WINDOW_BG_DARK);
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.00f, 0.59f, 0.53f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.00f, 0.59f, 0.53f, 1.0f));
@@ -2660,8 +2665,8 @@ void ImGuiWrapper::push_menu_style(const float scale)
     else {
         ImGuiWrapper::push_toolbar_style(scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f) * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 4.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, r10_rounding(4.0f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, r10_border(0.0f, scale));
         ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGuiWrapper::COL_WINDOW_BG);
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.00f, 0.59f, 0.53f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.00f, 0.59f, 0.53f, 1.0f));
@@ -2680,8 +2685,8 @@ void ImGuiWrapper::push_common_window_style(const float scale) {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 10.0f) * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.05f, 0.50f) * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, r10_rounding(3.0f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, r10_border(0.0f, scale));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.88f));                                   // 1
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGuiWrapper::COL_WINDOW_BG_DARK);                              // 2
         ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(54 / 255.0f, 54 / 255.0f, 60 / 255.0f, 1.00f));           // 3
@@ -2701,8 +2706,8 @@ void ImGuiWrapper::push_common_window_style(const float scale) {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 10.0f) * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.05f, 0.50f) * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, r10_rounding(3.0f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, r10_border(0.0f, scale));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(38 / 255.0f, 46 / 255.0f, 48 / 255.0f, 1.00f));              // 1
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.00f, 1.00f, 1.00f, 1.00f));                            // 2
         ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(245 / 255.0f, 245 / 255.0f, 245 / 255.0f, 1.00f));        // 3
@@ -2791,7 +2796,7 @@ void ImGuiWrapper::pop_button_disable_style() {
 void ImGuiWrapper::push_combo_style(const float scale)
 {
     if (m_is_dark_mode) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 1.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r10_rounding(1.0f) * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
         ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGuiWrapper::COL_WINDOW_BG_DARK);
         ImGui::PushStyleColor(ImGuiCol_BorderActive, ImVec4(0.f, 150.f / 255.f, 136.f / 255.f, 0.6f));  // ORCA hovered item border color
@@ -2801,7 +2806,7 @@ void ImGuiWrapper::push_combo_style(const float scale)
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImGuiWrapper::COL_WINDOW_BG_DARK);
         ImGui::PushStyleColor(ImGuiCol_Button, {1.00f, 1.00f, 1.00f, 0.0f});
     } else {
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 1.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r10_rounding(1.0f) * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
         ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGuiWrapper::COL_WINDOW_BG);
         ImGui::PushStyleColor(ImGuiCol_BorderActive, ImVec4(0.f, 150.f / 255.f, 136.f / 255.f, 0.6f));  // ORCA hovered item border color
@@ -2882,6 +2887,13 @@ void ImGuiWrapper::init_font(bool compress)
     } else if (m_glyph_ranges == ImGui::GetIO().Fonts->GetGlyphRangesThai()) {
         font_name_regular = "Sarabun-Medium.ttf";
         font_name_bold = "Sarabun-SemiBold.ttf";
+        needs_glyph_fallback = true;
+    }
+    // R10 Drafting theme: the VGA bitmap face, one weight, with the default font behind it for
+    // the symbols it lacks.
+    if (UITheme::use_r10_font()) {
+        font_name_regular = UITheme::R10_FONT_FILE;
+        font_name_bold = UITheme::R10_FONT_FILE;
         needs_glyph_fallback = true;
     }
     default_font = io.Fonts->AddFontFromFileTTF((Slic3r::resources_dir() + "/fonts/" + font_name_regular).c_str(), m_font_size, &cfg, ranges.Data);
@@ -3184,6 +3196,81 @@ void ImGuiWrapper::init_style()
     set_color(ImGuiCol_ScrollbarGrab, COL_ORANGE_DARK);
     set_color(ImGuiCol_ScrollbarGrabHovered, COL_ORANGE_LIGHT);
     set_color(ImGuiCol_ScrollbarGrabActive, COL_ORANGE_LIGHT);
+
+    if (UITheme::is_r10()) {
+        // R10 Drafting theme: green system text on the black screen, gray inverse highlights,
+        // red 1px frames, square corners.
+        const ImVec4 ground      = to_ImVec4(UITheme::R10::GROUND);
+        const ImVec4 system_text = to_ImVec4(UITheme::R10::SYSTEM_TEXT);
+        const ImVec4 highlight   = to_ImVec4(UITheme::R10::INK_DIM);
+        const ImVec4 shade       = to_ImVec4(UITheme::R10::INK_FAINT);
+        const ImVec4 rule        = to_ImVec4(UITheme::R10::RULE);
+
+        style.WindowRounding = style.ChildRounding = style.FrameRounding = style.PopupRounding =
+            style.ScrollbarRounding = style.GrabRounding = style.TabRounding = 0.0f;
+        style.WindowBorderSize = style.PopupBorderSize = 1.0f;
+
+        for (ImGuiCol_ col : {ImGuiCol_WindowBg, ImGuiCol_ChildBg, ImGuiCol_PopupBg, ImGuiCol_TitleBg, ImGuiCol_TitleBgCollapsed,
+                              ImGuiCol_MenuBarBg, ImGuiCol_FrameBg, ImGuiCol_ScrollbarBg, ImGuiCol_Button})
+            set_color(col, ground);
+        for (ImGuiCol_ col : {ImGuiCol_Text, ImGuiCol_CheckMark})
+            set_color(col, system_text);
+        for (ImGuiCol_ col : {ImGuiCol_ButtonHovered, ImGuiCol_Header, ImGuiCol_HeaderHovered, ImGuiCol_SliderGrab, ImGuiCol_Tab,
+                              ImGuiCol_TabHovered, ImGuiCol_TabActive, ImGuiCol_ScrollbarGrab, ImGuiCol_ScrollbarGrabHovered, ImGuiCol_ScrollbarGrabActive})
+            set_color(col, highlight);
+        for (ImGuiCol_ col : {ImGuiCol_TitleBgActive, ImGuiCol_FrameBgHovered, ImGuiCol_FrameBgActive, ImGuiCol_ButtonActive,
+                              ImGuiCol_HeaderActive, ImGuiCol_SliderGrabActive, ImGuiCol_TextSelectedBg, ImGuiCol_TabUnfocused, ImGuiCol_TabUnfocusedActive})
+            set_color(col, shade);
+        for (ImGuiCol_ col : {ImGuiCol_Border, ImGuiCol_Separator, ImGuiCol_SeparatorHovered, ImGuiCol_SeparatorActive})
+            set_color(col, rule);
+        set_color(ImGuiCol_TextDisabled, shade);
+    }
+}
+
+// R10 Drafting theme: most overlay windows push their own dark-mode colors, so the palette is applied
+// to the finished draw lists instead, the same way StateColor maps wx colors: only the exact chrome
+// colors of the dark styles above are replaced, so data colors (filaments, feature legend, axes) and
+// textured draws (icons, thumbnails) are left as they are.
+static ImU32 r10_color(ImU32 col)
+{
+    const ImU32 rgb   = col & ~IM_COL32_A_MASK;
+    const ImU32 alpha = col & IM_COL32_A_MASK;
+    // Dark-mode text is white at 88% opacity; it becomes opaque system text.
+    if (col == IM_COL32(255, 255, 255, 224))
+        return IM_COL32(0x55, 0xFF, 0x55, 0xFF);
+
+    static const std::pair<ImU32, ImU32> chrome[] = {
+        {IM_COL32(45, 45, 49, 0), IM_COL32(0x00, 0x00, 0x00, 0)},    // COL_WINDOW_BG_DARK: ground
+        {IM_COL32(57, 60, 66, 0), IM_COL32(0x00, 0x00, 0x00, 0)},    // COL_TOOLBAR_BG_DARK: ground
+        {IM_COL32(62, 62, 69, 0), IM_COL32(0x00, 0x00, 0x00, 0)},    // dark button: ground
+        {IM_COL32(54, 54, 60, 0), IM_COL32(0x55, 0x55, 0x55, 0)},    // title bar, disabled button: panel shade
+        {IM_COL32(73, 73, 78, 0), IM_COL32(0x55, 0x55, 0x55, 0)},    // hovered button: panel shade
+        {IM_COL32(84, 84, 90, 0), IM_COL32(0x55, 0x55, 0x55, 0)},    // hovered frame: panel shade
+        {IM_COL32(43, 64, 54, 0), IM_COL32(0x55, 0x55, 0x55, 0)},    // text selection: panel shade
+        {IM_COL32(61, 61, 69, 0), IM_COL32(0xFF, 0x55, 0x55, 0)},    // COL_SEPARATOR_DARK: rule
+        {IM_COL32(0, 150, 136, 0), IM_COL32(0xAA, 0xAA, 0xAA, 0)},   // COL_ORCA: highlight
+        {IM_COL32(0, 150, 135, 0), IM_COL32(0xAA, 0xAA, 0xAA, 0)},   // ORCA as ImVec4(0, .59, .53): highlight
+        {IM_COL32(0, 103, 91, 0), IM_COL32(0xAA, 0xAA, 0xAA, 0)},    // COL_ORCA_DARK: highlight
+        {IM_COL32(0, 129, 114, 0), IM_COL32(0xAA, 0xAA, 0xAA, 0)},   // COL_ORCA_HOVER_DARK: highlight
+        {IM_COL32(38, 166, 154, 0), IM_COL32(0xAA, 0xAA, 0xAA, 0)},  // COL_ORCA_HOVER: highlight
+    };
+    for (const auto &[from, to] : chrome)
+        if (rgb == from)
+            return to | alpha;
+    return col;
+}
+
+static void r10_remap_colors(ImDrawList &list, ImTextureID font_texture)
+{
+    // Vertices drawn with a texture other than the font atlas belong to images and keep their tint.
+    std::vector<bool> is_image(list.VtxBuffer.Size, false);
+    for (const ImDrawCmd &cmd : list.CmdBuffer)
+        if (cmd.UserCallback == nullptr && cmd.TextureId != font_texture)
+            for (unsigned int i = 0; i < cmd.ElemCount; ++i)
+                is_image[cmd.VtxOffset + list.IdxBuffer[cmd.IdxOffset + i]] = true;
+    for (int i = 0; i < list.VtxBuffer.Size; ++i)
+        if (!is_image[i])
+            list.VtxBuffer[i].col = r10_color(list.VtxBuffer[i].col);
 }
 
 void ImGuiWrapper::render_draw_data(ImDrawData *draw_data)
@@ -3269,6 +3356,8 @@ void ImGuiWrapper::render_draw_data(ImDrawData *draw_data)
 
     // Render command lists
     for (int n = 0; n < draw_data->CmdListsCount; ++n) {
+        if (UITheme::is_r10())
+            r10_remap_colors(*draw_data->CmdLists[n], io.Fonts->TexID);
         const ImDrawList* cmd_list = draw_data->CmdLists[n];
         const ImDrawVert* vtx_buffer = cmd_list->VtxBuffer.Data;
         const ImDrawIdx* idx_buffer  = cmd_list->IdxBuffer.Data;

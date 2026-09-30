@@ -25,6 +25,7 @@ add_executable(${_TEST_NAME}_tests
     test_plugin_audit.cpp
     test_shortcuts.cpp
     test_grbl_streamer.cpp
+    test_ui_theme.cpp
     ../fff_print/test_helpers.cpp
     )
 

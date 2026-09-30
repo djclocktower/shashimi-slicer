@@ -32,6 +32,8 @@ using namespace nlohmann;
 #define SETTING_CLOUD_PROVIDERS "cloud_providers"
 #define SETTING_OPENGL_AA_SAMPLES "opengl_antialiasing_samples"
 #define SETTING_OPENGL_FXAA_ENABLED "opengl_fxaa_enabled"
+// VHS tape look over the 3D view, independent of the interface theme
+#define SETTING_VHS_FILTER "vhs_filter"
 #define SETTING_OPENGL_FPS_CAP "opengl_fps_cap"
 #define SETTING_OPENGL_SCENE_CACHE "opengl_scene_cache"
 #define SETTING_OPENGL_SKIP_IDENTICAL_FRAMES "opengl_skip_identical_frames"

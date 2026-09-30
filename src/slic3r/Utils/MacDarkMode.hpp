@@ -8,6 +8,8 @@ namespace GUI {
 
 #if __APPLE__
 extern bool mac_dark_mode();
+// Force the dark Aqua appearance on the whole app, whatever the system setting (R10 Drafting theme)
+extern void mac_set_dark_appearance();
 extern double mac_max_scaling_factor();
 extern void set_miniaturizable(void * window);
 void WKWebView_evaluateJavaScript(void * web, wxString const & script, void (*callback)(wxString const &));

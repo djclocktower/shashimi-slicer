@@ -10,6 +10,7 @@
 #include "OpenGLManager.hpp"
 #include "GUI_App.hpp"
 #include "GUI.hpp"
+#include "UITheme.hpp"
 #include "GLModel.hpp"
 
 #include <glad/gl.h>
@@ -254,7 +255,7 @@ bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::stri
     if (filenames.empty() || states.empty() || sprite_size_px == 0)
         return false;
 
-    bool dark_mode = wxGetApp().app_config->get("dark_color_mode") == "1";
+    bool dark_mode = wxGetApp().dark_mode();
 
     // every tile needs to have a 1px border around it to avoid artifacts when linear sampling on its edges
     unsigned int sprite_size_px_ex = sprite_size_px + 1;
@@ -316,6 +317,8 @@ bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::stri
 
         // offset by 1 to leave the first pixel empty (both in x and y)
         nsvgRasterize(rast, image, 1, 1, scale, sprite_data.data(), sprite_size_px, sprite_size_px, sprite_stride);
+        if (dark_mode)
+            UITheme::recolor_icon(sprite_data.data(), sprite_n_pixels);
 
         ::memcpy((void*)pressed_data.data(), (const void*)sprite_data.data(), sprite_bytes);
         for (int i = 0; i < sprite_n_pixels; ++i) {
@@ -955,6 +958,10 @@ bool GLTexture::load_from_svg(const std::string& filename, bool use_mipmaps, boo
     // creates the temporary buffer only once, with max size, and reuse it for all the levels, if generating mipmaps
     std::vector<unsigned char> data(n_pixels * 4, 0);
     nsvgRasterizeXY(rast, image, 0, 0, scale_w, scale_h, data.data(), m_width, m_height, m_width * 4);
+    // R10 Drafting theme: dark-mode UI icons in the system palette (bed textures keep their colors)
+    const bool r10_icon = boost::algorithm::iends_with(filename, "_dark.svg");
+    if (r10_icon)
+        UITheme::recolor_icon(data.data(), n_pixels);
 
     // sends data to gpu
     glsafe(::glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
@@ -992,6 +999,8 @@ bool GLTexture::load_from_svg(const std::string& filename, bool use_mipmaps, boo
             data.resize(lod_w * lod_h * 4);
 
             nsvgRasterizeXY(rast, image, 0, 0, scale_w, scale_h, data.data(), lod_w, lod_h, lod_w * 4);
+            if (r10_icon)
+                UITheme::recolor_icon(data.data(), lod_w * lod_h);
             if (compression_enabled) {
                 // initializes the texture on GPU
                 glsafe(::glTexImage2D(GL_TEXTURE_2D, level, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, (GLsizei)lod_w, (GLsizei)lod_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0));

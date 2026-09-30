@@ -7403,7 +7403,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     //BBS :partplatelist construction
     , partplate_list(this->q, &model)
 {
-    m_is_dark = wxGetApp().app_config->get("dark_color_mode") == "1";
+    m_is_dark = wxGetApp().dark_mode();
 
 #ifdef __WXGTK__
     const bool disable_wayland_floating = Slic3r::GUI::is_running_on_wayland();
@@ -13435,7 +13435,7 @@ void Plater::priv::on_apple_change_color_mode(wxSysColourChangedEvent& evt) {
 }
 
 void Plater::priv::on_change_color_mode(SimpleEvent& evt) {
-    m_is_dark = wxGetApp().app_config->get("dark_color_mode") == "1";
+    m_is_dark = wxGetApp().dark_mode();
     sidebar->on_change_color_mode(m_is_dark);
     view3D->get_canvas3d()->on_change_color_mode(m_is_dark);
     preview->get_canvas3d()->on_change_color_mode(m_is_dark);

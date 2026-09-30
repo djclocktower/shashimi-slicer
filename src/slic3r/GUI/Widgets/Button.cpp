@@ -1,5 +1,6 @@
 #include "Button.hpp"
 #include "Label.hpp"
+#include "../UITheme.hpp"
 
 #include <wx/dcgraph.h>
 #include <wx/tipwin.h>
@@ -182,6 +183,15 @@ wxString btn_confirm[10]  = {"#DFDFDF", "#009688", "#26A69A", "#009688", "#00968
 wxString btn_alert[10]    = {"#DFDFDF", "#DFDFDF", "#E14747", "#DFDFDF", "#DFDFDF", "#6B6A6A", "#262E30", "#FFFFFD", "#009688", "#009688"};
 wxString btn_disabled[10] = {"#DFDFDF", "#DFDFDF", "#DFDFDF", "#DFDFDF", "#DFDFDF", "#6B6A6A", "#6B6A6A", "#262E30", "#DFDFDF", "#DFDFDF"};
 
+// R10 Drafting theme (UITheme::is_r10()): framed words on the black screen, the gray inverse bar on hover,
+// the default action as a gray panel with black text. Values are the theme's final colors (see StateColor.cpp).
+//                           Background                                             Foreground                       Border
+//                           0-Disabled 1-Pressed  2-Hover    3-Normal   4-Enabled  5-Disabled 6-Normal   7-Hover    8-Frame    9-Focus
+wxString btn_regular_r10[10]  = {"#010101", "#AAAAAA", "#AAAAAA", "#010101", "#010101", "#555555", "#55FF55", "#555555", "#AAAAAA", "#FFFF55"};
+wxString btn_confirm_r10[10]  = {"#010101", "#AAAAAA", "#AAAAAA", "#AAAAAA", "#AAAAAA", "#555555", "#010101", "#010101", "#AAAAAA", "#FFFF55"};
+wxString btn_alert_r10[10]    = {"#010101", "#FF5555", "#FF5555", "#010101", "#010101", "#555555", "#FF5555", "#010101", "#FF5555", "#FFFF55"};
+wxString btn_disabled_r10[10] = {"#010101", "#010101", "#010101", "#010101", "#010101", "#555555", "#555555", "#555555", "#555555", "#555555"};
+
 void Button::SetStyle(const ButtonStyle style, const ButtonType type)
 {
     if (type == ButtonType::Compact) {
@@ -219,11 +229,12 @@ void Button::SetStyle(const ButtonStyle style, const ButtonType type)
 
     bool is_dark = StateColor::darkModeColorFor("#FFFFFF") != wxColour("#FFFFFF");
 
-    auto clr_arr = style == ButtonStyle::Regular  ? btn_regular :
-                   style == ButtonStyle::Confirm  ? btn_confirm :
-                   style == ButtonStyle::Alert    ? btn_alert :
-                   style == ButtonStyle::Disabled ? btn_disabled :
-                                                    btn_regular;
+    const bool r10 = Slic3r::GUI::UITheme::is_r10();
+    auto clr_arr = style == ButtonStyle::Regular  ? (r10 ? btn_regular_r10 : btn_regular) :
+                   style == ButtonStyle::Confirm  ? (r10 ? btn_confirm_r10 : btn_confirm) :
+                   style == ButtonStyle::Alert    ? (r10 ? btn_alert_r10 : btn_alert) :
+                   style == ButtonStyle::Disabled ? (r10 ? btn_disabled_r10 : btn_disabled) :
+                                                    (r10 ? btn_regular_r10 : btn_regular);
 
     auto bg_color = StateColor(std::pair(wxColour(clr_arr[0]), (int) StateColor::Disabled),
                                std::pair(wxColour(clr_arr[1]), (int) StateColor::Pressed),
@@ -232,11 +243,11 @@ void Button::SetStyle(const ButtonStyle style, const ButtonType type)
                                std::pair(wxColour(clr_arr[4]), (int) StateColor::Enabled));
     bg_color.setTakeFocusedAsHovered(false);
     this->SetBackgroundColor(bg_color);
-    wxColour focus_clr = clr_arr[is_dark ? 8 : 9];
-    auto border_color  = StateColor(std::pair(wxColour(clr_arr[0]), (int) StateColor::Disabled),
+    wxColour focus_clr = clr_arr[r10 ? 9 : is_dark ? 8 : 9];
+    auto border_color  = StateColor(std::pair(wxColour(clr_arr[r10 ? 5 : 0]), (int) StateColor::Disabled),
                                     std::pair(wxColour(clr_arr[2]), (int) (StateColor::Hovered | ~StateColor::Focused)),
                                     std::pair(wxColour(focus_clr), (int) StateColor::Focused),
-                                    std::pair(wxColour(clr_arr[3]), (int) StateColor::Normal));
+                                    std::pair(wxColour(clr_arr[r10 ? 8 : 3]), (int) StateColor::Normal));
     border_color.setTakeFocusedAsHovered(false);
     this->SetBorderColor(border_color);
     this->SetTextColor(StateColor(std::pair(wxColour(clr_arr[5]), (int) StateColor::Disabled),

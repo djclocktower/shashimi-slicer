@@ -33,6 +33,7 @@
 #include "Shortcuts.hpp"
 #include "GUI_ObjectList.hpp"
 #include "GUI_Colors.hpp"
+#include "UITheme.hpp"
 #include "Mouse3DController.hpp"
 #include "I18N.hpp"
 #include "NotificationManager.hpp"
@@ -79,6 +80,7 @@
 #include <iostream>
 #include <float.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <set>
 
@@ -1245,6 +1247,10 @@ GLCanvas3D::~GLCanvas3D()
             glsafe(::glDeleteTextures(1, &m_fxaa_texture_id));
             m_fxaa_texture_id = 0;
         }
+        if (m_vhs_texture_id != 0) {
+            glsafe(::glDeleteTextures(1, &m_vhs_texture_id));
+            m_vhs_texture_id = 0;
+        }
         if (m_ssao_color_texture_id != 0) {
             glsafe(::glDeleteTextures(1, &m_ssao_color_texture_id));
             m_ssao_color_texture_id = 0;
@@ -1286,7 +1292,7 @@ bool GLCanvas3D::init()
         return false;
 
     // init dark mode status
-    on_change_color_mode(wxGetApp().app_config->get("dark_color_mode") == "1", false);
+    on_change_color_mode(wxGetApp().dark_mode(), false);
 
     m_show_world_axes = wxGetApp().app_config->get("show_axes") == "true";
     
@@ -1344,6 +1350,15 @@ bool GLCanvas3D::init()
 
 void GLCanvas3D::on_change_color_mode(bool is_dark, bool reinit) {
     m_is_dark = is_dark;
+    // R10 Drafting theme: the drawing area is the black screen, the bed a black sheet ruled by grid
+    // lines in ink-faint, brighter on the selected plate.
+    if (UITheme::is_r10()) {
+        DEFAULT_BG_LIGHT_COLOR_DARK         = UITheme::R10::GROUND;
+        Bed3D::DEFAULT_MODEL_COLOR_DARK     = UITheme::R10::GROUND;
+        PartPlate::UNSELECT_DARK_COLOR      = UITheme::R10::GROUND;
+        PartPlate::LINE_TOP_DARK_COLOR      = UITheme::R10::INK_FAINT;
+        PartPlate::LINE_TOP_SEL_DARK_COLOR  = UITheme::R10::INK_DIM;
+    }
     // Bed color
     m_bed.on_change_color_mode(is_dark);
     // GcodeViewer color
@@ -2218,6 +2233,9 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
     _render_overlay_toolbars();
 
     wxGetApp().imgui()->render(draw_data);
+
+    if (_is_vhs_filter_enabled())
+        _render_vhs_pass(static_cast<unsigned int>(cnv_size.get_width()), static_cast<unsigned int>(cnv_size.get_height()));
 
     // On Wayland, eglSwapBuffers blocks when the canvas is hidden or
     // occluded. Skip the swap to avoid stalling the render loop.
@@ -7727,6 +7745,11 @@ bool GLCanvas3D::_is_fxaa_enabled() const
     return wxGetApp().app_config != nullptr && wxGetApp().app_config->get_bool(SETTING_OPENGL_FXAA_ENABLED);
 }
 
+bool GLCanvas3D::_is_vhs_filter_enabled() const
+{
+    return wxGetApp().app_config != nullptr && wxGetApp().app_config->get_bool(SETTING_VHS_FILTER);
+}
+
 bool GLCanvas3D::_is_realistic_view_enabled() const
 {
     const AppConfig* cfg = wxGetApp().app_config;
@@ -7845,6 +7868,45 @@ void GLCanvas3D::_render_fxaa_pass(unsigned int width, unsigned int height)
 
     glsafe(::glActiveTexture(GL_TEXTURE0));
     glsafe(::glBindTexture(GL_TEXTURE_2D, m_fxaa_texture_id));
+    m_background.render();
+    glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
+    shader->stop_using();
+
+    glsafe(::glEnable(GL_DEPTH_TEST));
+    glsafe(::glEnable(GL_BLEND));
+    glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+}
+
+void GLCanvas3D::_render_vhs_pass(unsigned int width, unsigned int height)
+{
+    if (width == 0 || height == 0)
+        return;
+
+    GLShaderProgram* shader = wxGetApp().get_shader("vhs");
+    if (shader == nullptr)
+        return;
+
+    GLTexture::copy_from_framebuffer(m_vhs_texture_id, m_vhs_texture_size, width, height, GL_LINEAR);
+
+    // The noise and the tracking band move with each redrawn frame; no timer keeps an idle canvas busy.
+    static const auto start = std::chrono::steady_clock::now();
+    const float time = std::fmod(std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count(), 1000.0f);
+    // One scan line per logical pixel, so the lines keep their size on high-DPI screens.
+    const float line_scale = std::max(1.0f, std::round(get_scale() * wxGetApp().em_unit() / 10.0f));
+
+    glsafe(::glDisable(GL_DEPTH_TEST));
+    glsafe(::glDisable(GL_BLEND));
+
+    shader->start_using();
+    shader->set_uniform("view_model_matrix", Transform3d::Identity());
+    shader->set_uniform("projection_matrix", Transform3d::Identity());
+    shader->set_uniform("uniform_texture", 0);
+    shader->set_uniform("inv_tex_size", Vec2f(1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height)));
+    shader->set_uniform("time", time);
+    shader->set_uniform("line_scale", line_scale);
+
+    glsafe(::glActiveTexture(GL_TEXTURE0));
+    glsafe(::glBindTexture(GL_TEXTURE_2D, m_vhs_texture_id));
     m_background.render();
     glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
     shader->stop_using();

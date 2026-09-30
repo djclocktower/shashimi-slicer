@@ -1,6 +1,7 @@
 #include "libslic3r/Utils.hpp"
 #include "Label.hpp"
 #include "StaticBox.hpp"
+#include "../UITheme.hpp"
 #include <wx/intl.h> // For wxLocale
 #include <wx/dcclient.h>
 #include <wx/settings.h>
@@ -24,6 +25,12 @@ wxFont Label::sysFont(int size, bool bold)
     // Check if the current locale is Korean
     if (wxLocale::GetSystemLanguage() == wxLANGUAGE_KOREAN) {
         face = "NanumGothic";
+    }
+
+    // R10 Drafting theme: one bitmap face, no bold weight
+    if (Slic3r::GUI::UITheme::use_r10_font()) {
+        face = Slic3r::GUI::UITheme::R10_FONT_FACE;
+        bold = false;
     }
 
     wxFont font{size, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL, false, face};
@@ -101,6 +108,12 @@ void Label::initSysFont()
         wxFont::AddPrivateFont(wxString::FromUTF8(resource_path + "/fonts/NanumGothic-Regular.ttf"));
         wxFont::AddPrivateFont(wxString::FromUTF8(resource_path + "/fonts/NanumGothic-Bold.ttf"));
     }
+    bool load_r10_font = Slic3r::GUI::UITheme::use_r10_font();
+#ifdef __linux__
+    load_r10_font = load_r10_font && !fc_font_available(Slic3r::GUI::UITheme::R10_FONT_FACE);
+#endif
+    if (load_r10_font)
+        wxFont::AddPrivateFont(wxString::FromUTF8(Slic3r::resources_dir() + "/fonts/" + Slic3r::GUI::UITheme::R10_FONT_FILE));
 #endif
     Head_48 = Label::sysFont(48, true);
     Head_32 = Label::sysFont(32, true);
