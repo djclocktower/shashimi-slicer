@@ -29,6 +29,10 @@ concurrency:
 jobs:
   build_windows:
     name: Quick build Windows x64
+    # Lets the build delete the compiler cache entries its new one supersedes.
+    permissions:
+      contents: read
+      actions: write
     uses: ./.github/workflows/build_check_cache.yml
     with:
       os: windows-latest
