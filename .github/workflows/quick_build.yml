@@ -1,0 +1,38 @@
+name: Quick build (Windows x64)
+
+# A Windows x64 portable build for trying out a change, without the full
+# matrix, unit tests or installers of Build all. It shares Build all's
+# dependency and compiler caches, so after one build of the default branch
+# only what a change touches is recompiled.
+on:
+  push:
+    branches:
+     - 'claude/**'
+    paths:
+     - 'deps/**'
+     - 'deps_src/**'
+     - 'src/**'
+     - 'resources/**'
+     - 'localization/**'
+     - '**/CMakeLists.txt'
+     - 'version.inc'
+     - 'build_win.bat'
+     - '.github/workflows/quick_build.yml'
+     - '.github/workflows/build_*.yml'
+
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_windows:
+    name: Quick build Windows x64
+    uses: ./.github/workflows/build_check_cache.yml
+    with:
+      os: windows-latest
+      arch: x64
+      compiler: clang
+      quick: true
+    secrets: inherit

@@ -26,6 +26,9 @@ on:
       force-build:
         required: false
         type: boolean
+      quick:
+        required: false
+        type: boolean
 
 jobs:
   build_deps:
@@ -206,4 +209,5 @@ jobs:
       os: ${{ inputs.os }}
       arch: ${{ inputs.arch }}
       compiler: ${{ inputs.compiler }}
+      quick: ${{ inputs.quick || false }}
     secrets: inherit
