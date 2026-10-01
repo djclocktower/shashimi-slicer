@@ -1,23 +1,22 @@
 #ifndef slic3r_GUI_McpControl_hpp_
 #define slic3r_GUI_McpControl_hpp_
 
-// MCP control surface (slice 1): a local JSON-RPC 2.0 server, line-delimited over a
-// Unix domain socket, that lets an external MCP bridge drive and perceive the Design
-// tab. Off unless the env var ORCA_CAD_MCP is set:
-//   ORCA_CAD_MCP=1                -> socket at /tmp/orca-cad-mcp.sock
-//   ORCA_CAD_MCP=/path/to.sock    -> socket at that path
-// All CAD work is marshalled onto the wx main thread and runs through the SAME
-// CadDocument kernel the GUI uses (no parallel engine). Slice-1 methods:
-//   describe_tools, describe_scene, extrude.
-//
-// ponytail: Unix-socket only (POSIX). Windows compiles this to a no-op; add a named
-// pipe transport when a Windows agent actually needs it.
+// Design/CAM tab half of the MCP control surface. The transport, the threading and the
+// slicer-side tools live in slic3r/GUI/Mcp/McpServer; every method the server does not
+// register itself is handed to cad_mcp_handle_on_main(). All CAD work runs through the SAME
+// CadDocument kernel the GUI uses (no parallel engine).
+
+#include <string>
+#include <nlohmann/json.hpp>
 
 namespace Slic3r { namespace GUI {
 
-// Start the server thread iff ORCA_CAD_MCP is set. Safe to call once after the
-// MainFrame + DesignPanel exist. No-op when the env var is unset or on Windows.
-void start_mcp_control_if_enabled();
+// The Design tab's tool descriptors: {"tools": [...], "id_lifetime": "...", ...}.
+nlohmann::json cad_mcp_describe_tools();
+
+// Serve one Design/CAM method ON THE MAIN THREAD. Returns a complete JSON-RPC reply string;
+// an unknown method is a -32601 error.
+std::string cad_mcp_handle_on_main(const std::string& method, const nlohmann::json& params, const nlohmann::json& id);
 
 }} // namespace Slic3r::GUI
 

@@ -358,6 +358,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/LinuxDisplayBackend.cpp
     GUI/LinuxDisplayBackend.hpp
     GUI/MainFrame.cpp
+    GUI/Mcp/McpServer.cpp
+    GUI/Mcp/McpServer.hpp
+    GUI/Mcp/McpAppTools.cpp
+    GUI/Mcp/McpSlicerTools.cpp
+    GUI/Mcp/McpUiTools.cpp
+    GUI/Mcp/McpUtil.hpp
     GUI/MainFrame.hpp
     GUI/MarkdownTip.cpp
     GUI/MarkdownTip.hpp

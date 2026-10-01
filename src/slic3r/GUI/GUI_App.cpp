@@ -97,6 +97,7 @@
 #include "GUI_Utils.hpp"
 #include "3DScene.hpp"
 #include "MainFrame.hpp"
+#include "Mcp/McpServer.hpp"
 #include "Plater.hpp"
 #include "GLCanvas3D.hpp"
 #include "EncodedFilament.hpp"
@@ -3565,6 +3566,9 @@ bool GUI_App::on_init_inner()
     });
 
     m_initialized = true;
+
+    // Opens the MCP control endpoint iff ORCA_MCP (or the legacy ORCA_CAD_MCP) is set.
+    Mcp::start_server_if_enabled();
 
     flush_logs();
 

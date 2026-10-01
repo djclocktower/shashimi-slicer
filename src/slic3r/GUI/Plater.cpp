@@ -7282,6 +7282,8 @@ struct Plater::priv
     PrintPrepareData            m_print_job_data;
     bool                        inside_snapshot_capture() { return m_prevent_snapshots != 0; }
     int                         process_completed_with_error { -1 }; //-1 means no error
+    // How the last validation or background run of each plate ended ("" = fine), for scripted control.
+    std::map<int, std::string>  last_slicing_errors;
 
     //BBS: project
     BBLProject                  project;
@@ -10913,6 +10915,7 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         Polygons polygons;
         std::vector<std::pair<Polygon, float>> height_polygons;
         StringObjectException err = background_process.validate(&warnings, &polygons, &height_polygons);
+        last_slicing_errors[partplate_list.get_curr_plate_index()] = err.string;
         // update string by type
         q->post_process_string_object_exception(err);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": validate err=%1%, warnings=%2%")%err.string%warnings.size();
@@ -12851,6 +12854,8 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
         this->notification_manager->set_slicing_progress_canceled(_u8L("Slicing Canceled"));
         is_finished = true;
     }
+
+    last_slicing_errors[partplate_list.get_curr_plate_index()] = evt.cancelled() ? std::string("cancelled") : lifecycle_error_msg;
 
     {
         Slic3r::LifecycleEventContext ctx;
@@ -18395,6 +18400,30 @@ void Plater::export_gcode(bool prefer_removable)
         } catch (...) {}
 
     }
+}
+
+bool Plater::export_gcode_to(const fs::path& output_path)
+{
+    // export_gcode() without its file dialog: the same checks, then the same export.
+    if (p->model.objects.empty() || output_path.empty())
+        return false;
+    if (p->process_completed_with_error == p->partplate_list.get_curr_plate_index() || p->background_process.is_export_scheduled())
+        return false;
+    const unsigned int state = p->update_restart_background_process(false, false);
+    if (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID)
+        return false;
+    p->notification_manager->new_export_began(false);
+    p->exporting_status     = ExportingStatus::EXPORTING_TO_LOCAL;
+    p->last_output_path     = output_path.string();
+    p->last_output_dir_path = output_path.parent_path().string();
+    p->export_gcode(output_path, false);
+    return true;
+}
+
+std::string Plater::last_slicing_error(int plate_idx) const
+{
+    auto it = p->last_slicing_errors.find(plate_idx);
+    return it == p->last_slicing_errors.end() ? std::string() : it->second;
 }
 
 void Plater::send_to_printer(bool isall)

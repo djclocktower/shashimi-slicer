@@ -42,7 +42,6 @@
 #include "slic3r/GUI/CAD/CadTabPage.hpp"
 #include "slic3r/GUI/Laser/LaserPanel.hpp"
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
-#include "slic3r/GUI/CAD/McpControl.hpp"
 #endif
 #include "WebViewDialog.hpp"
 #include "../Utils/Process.hpp"
@@ -1440,7 +1439,6 @@ void MainFrame::init_tabpanel() {
                                                                          : TAB_ID_MODELING);
         });
     });
-    start_mcp_control_if_enabled();   // opens the MCP socket iff ORCA_CAD_MCP is set
 #endif
 
     create_preset_tabs();

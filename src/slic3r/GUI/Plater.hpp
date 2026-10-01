@@ -527,6 +527,12 @@ public:
 
     void send_to_printer(bool isall = false);
     void export_gcode(bool prefer_removable);
+    // export_gcode() of the current plate to a given path, without the file dialog (scripted
+    // control). False when the export could not be scheduled.
+    bool export_gcode_to(const boost::filesystem::path& output_path);
+    // How the last validation or slicing run of a plate ended: "" for success or never sliced,
+    // "cancelled", or the error message.
+    std::string last_slicing_error(int plate_idx) const;
     void export_gcode_3mf(bool export_all = false);
     void send_gcode_finish(wxString name);
     void export_core_3mf();
