@@ -54,9 +54,8 @@ std::string normalize_label(const wxString& s)
 
 wxWindow* default_window()
 {
-    for (wxWindow* w : wxTopLevelWindows)
-        if (auto* d = dynamic_cast<wxDialog*>(w); d && d->IsModal())
-            return w;
+    if (wxDialog* d = open_modal_dialog())
+        return d;
     return wxGetApp().mainframe;
 }
 
@@ -400,6 +399,8 @@ json ui_close(const json& params)
     if (w == wxGetApp().mainframe)
         throw ToolError("refusing to close the main window", -32602);
     auto* dlg = dynamic_cast<wxDialog*>(w);
+    if (dlg && dlg->IsModal() && dlg != open_modal_dialog())
+        throw ToolError("another dialog is open on top of this one; close that first", -32602);
     if (dlg && dlg->IsModal()) {
         static const std::map<std::string, int> ids{{"ok", wxID_OK}, {"cancel", wxID_CANCEL}, {"yes", wxID_YES},
                                                     {"no", wxID_NO}, {"apply", wxID_APPLY}, {"close", wxID_CLOSE}};

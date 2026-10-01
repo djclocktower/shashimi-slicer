@@ -23,6 +23,7 @@ import json
 import os
 import socket
 import sys
+import time
 
 SERVER_INFO = {"name": "orca", "version": "1.0"}
 IS_WINDOWS = os.name == "nt"
@@ -63,18 +64,22 @@ def _round_trip(line):
     if IS_WINDOWS:
         last = None
         for ep in _candidates():
-            try:
-                with open(ep, "r+b", buffering=0) as pipe:
-                    pipe.write(line)
-                    buf = b""
-                    while not buf.endswith(b"\n"):
-                        chunk = pipe.read(65536)
-                        if not chunk:
-                            break
-                        buf += chunk
-                    return buf
-            except OSError as e:
-                last = e
+            for _attempt in range(40):
+                try:
+                    with open(ep, "r+b", buffering=0) as pipe:
+                        pipe.write(line)
+                        buf = b""
+                        while not buf.endswith(b"\n"):
+                            chunk = pipe.read(65536)
+                            if not chunk:
+                                break
+                            buf += chunk
+                        return buf
+                except OSError as e:
+                    last = e
+                    if getattr(e, "winerror", None) != 231:   # ERROR_PIPE_BUSY: every instance taken, retry
+                        break
+                    time.sleep(0.05)
         raise last
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(IO_TIMEOUT)
@@ -224,6 +229,9 @@ def main():
         try:
             req = json.loads(line)
         except Exception:
+            continue
+        if not isinstance(req, dict):   # batches are not used by MCP clients
+            _send({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "expected a single JSON-RPC object"}})
             continue
         was_fallback = _served_fallback
         resp = handle(req)

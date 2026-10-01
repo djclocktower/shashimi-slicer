@@ -312,25 +312,24 @@ json screenshot(const json& params)
         throw ToolError("source must be viewport, render or window", -32602);
 
     // The live 3D view (Prepare or Preview, whichever is shown) exactly as the user sees it,
-    // toolpaths included: render a frame, then read it back from the front buffer.
+    // toolpaths included: render a frame and read it from the back buffer before it is swapped.
+    // (The front buffer is undefined wherever another window, such as a dialog, covers it.)
     GLCanvas3D* canvas = p.get_current_canvas3D();
     if (canvas == nullptr || canvas->get_wxglcanvas() == nullptr || !canvas->get_wxglcanvas()->IsShownOnScreen())
         throw ToolError("no 3D view is shown; select the prepare or preview tab first (app_select_tab)");
-    wxGLCanvas* wxc = canvas->get_wxglcanvas();
-    canvas->set_as_dirty();
-    canvas->render();
-    wxGLContext* ctx = wxGetApp().init_glcontext(*wxc);
-    if (ctx == nullptr || !wxc->SetCurrent(*ctx))
-        throw ToolError("cannot make the OpenGL context current");
     const Size sz = canvas->get_canvas_size();
     const int  w  = sz.get_width(), h = sz.get_height();
     if (w <= 0 || h <= 0)
         throw ToolError("the 3D view has no size");
     std::vector<unsigned char> rgba(size_t(w) * h * 4);
-    ::glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    ::glReadBuffer(GL_FRONT);
-    ::glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-    ::glReadBuffer(GL_BACK);
+    const bool rendered = canvas->render_and_capture([&]() {
+        ::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ::glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        ::glReadBuffer(GL_BACK);
+        ::glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    });
+    if (!rendered)
+        throw ToolError("the 3D view did not render a frame");
     for (size_t k = 3; k < rgba.size(); k += 4)
         rgba[k] = 255;   // the default framebuffer's alpha is not meaningful
     return encode_png(rgba, unsigned(w), unsigned(h), true, path);

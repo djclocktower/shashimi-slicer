@@ -13,7 +13,9 @@
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/trim.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/nowide/fstream.hpp>
 
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/CutUtils.hpp"
@@ -518,14 +520,23 @@ json object_cut(const json& params)
     if (keep == "both" || keep == "lower") attrs = attrs | ModelObjectCutAttribute::KeepLower;
     if (!attrs.has(ModelObjectCutAttribute::KeepUpper) && !attrs.has(ModelObjectCutAttribute::KeepLower))
         throw ToolError("keep must be both, upper or lower", -32602);
-    if (arg<bool>(params, "keep_as_parts", false)) attrs = attrs | ModelObjectCutAttribute::KeepAsParts;
+    if (arg<bool>(params, "keep_as_parts", false)) {
+        // The cut keeps both halves in the upper object then; with one discarded it has none.
+        if (keep != "both")
+            throw ToolError("keep_as_parts needs keep: both", -32602);
+        attrs = attrs | ModelObjectCutAttribute::KeepAsParts;
+    }
     if (arg<bool>(params, "flip_upper", false))    attrs = attrs | ModelObjectCutAttribute::FlipUpper;
     if (arg<bool>(params, "place_on_cut", false)) {
         attrs = attrs | ModelObjectCutAttribute::PlaceOnCutUpper;
         attrs = attrs | ModelObjectCutAttribute::PlaceOnCutLower;
     }
 
-    // Same construction as Plater::cut_horizontal (the calibration cuts).
+    // A plane that misses the object yields no parts, and applying that would delete the object.
+    const BoundingBoxf3 bb = o->instance_bounding_box(size_t(inst));
+    if (!(z > bb.min.z() + EPSILON && z < bb.max.z() - EPSILON))
+        throw ToolError("z must lie inside the object (" + std::to_string(bb.min.z()) + " .. " + std::to_string(bb.max.z()) + ")", -32602);
+    // Same construction as Plater::cut_horizontal (the calibration cuts): the plane is at world Z = z.
     Plater::TakeSnapshot snapshot(&p, "Cut by Plane");
     const Vec3d  offset = o->instances[inst]->get_offset();
     Cut          cut(o, inst, Geometry::translation_transform(z * Vec3d::UnitZ() - offset), attrs);
@@ -567,7 +578,7 @@ json volume_set(const json& params)
         sel.clear();
         sel.add_volume(unsigned(idx), unsigned(v), 0, true);
         object_list().update_selections();
-        object_list().set_volume_type(volume_type(req<std::string>(params, "type")));
+        object_list().set_volume_type(volume_type(req<std::string>(params, "type")));   // may reorder the parts
     }
     if (params.contains("name") || params.contains("filament")) {
         Plater::TakeSnapshot snapshot(&p, "Edit Part");
@@ -582,7 +593,9 @@ json volume_set(const json& params)
         refresh_object_list();
         p.changed_object(idx);
     }
-    return object_json(idx, true)["volumes"][v];
+    const auto& vols = p.model().objects[idx]->volumes;
+    const auto  it   = std::find(vols.begin(), vols.end(), mv);
+    return object_json(idx, true)["volumes"][it == vols.end() ? v : int(it - vols.begin())];
 }
 
 json volume_delete(const json& params)
@@ -593,7 +606,9 @@ json volume_delete(const json& params)
         throw ToolError("no volume " + std::to_string(v), -32602);
     if (plater().model().objects[idx]->volumes.size() == 1)
         throw ToolError("an object's last part cannot be deleted; delete the object", -32602);
-    object_list().delete_from_model_and_list(ItemType::itVolume, idx, v);
+    // The list overload, which keeps model and list in step when the model refuses the delete
+    // (last solid part beside modifiers, parts of a cut object).
+    object_list().delete_from_model_and_list(std::vector<ItemForDelete>{ItemForDelete(ItemType::itVolume, idx, v)});
     return object_json(idx, true);
 }
 
@@ -907,6 +922,8 @@ json preset_save(const json& params)
             throw ToolError("the selected preset is a system preset: pass a new name to save a user preset", -32602);
         name = sel.name;
     }
+    if (Plater::has_illegal_filename_characters(name) || boost::ends_with(name, "(modified)") || boost::trim_copy(name) != name)
+        throw ToolError("'" + name + "' is not a valid preset name (no <>:/\\|?*\" characters, no surrounding spaces, no \"(modified)\" suffix)", -32602);
     if (const Preset* existing = c.find_preset(name, false); existing && (existing->is_system || existing->is_default))
         throw ToolError("'" + name + "' is a system preset and cannot be overwritten", -32602);
     tab_of(t).save_preset(name, arg<bool>(params, "detach", false));
@@ -939,8 +956,11 @@ json preset_diff(const json& params)
 
 json filament_add(const json& params)
 {
-    Plater& p = plater();
+    Plater&      p      = plater();
+    const size_t before = bundle().filament_presets.size();
     p.sidebar().add_filament();
+    if (bundle().filament_presets.size() <= before)
+        throw ToolError("no filament slot was added (the printer's maximum is reached?)");
     const int slot = int(bundle().filament_presets.size()) - 1;
     if (const std::string preset = arg<std::string>(params, "preset", ""); !preset.empty())
         preset_select(json{{"type", "filament"}, {"name", preset}, {"slot", slot}});
@@ -1130,7 +1150,8 @@ json slicing_status(const json& params)
     Plater&        p      = plater();
     PartPlateList& plates = p.get_partplate_list();
     json           out    = json::array();
-    const int      only   = arg<int>(params, "plate", -1);
+    // Also the after-wait status of `slice`, whose plate may be "current" / "all": all plates then.
+    const int      only   = params.contains("plate") && params["plate"].is_number_integer() ? params["plate"].get<int>() : -1;
     for (int i = 0; i < plates.get_plate_count(); ++i) {
         if (only >= 0 && i != only)
             continue;
@@ -1274,7 +1295,7 @@ json gcode_read(const json& params)
             throw ToolError("plate " + std::to_string(plate.get_index()) + " is not sliced (slice it first, or pass a path)", -32011);
         path = plate.get_tmp_gcode_path();
     }
-    std::ifstream in(fs::path(path).string());
+    boost::nowide::ifstream in(path.c_str());
     if (!in)
         throw ToolError("cannot read " + path);
     const long        offset    = std::max(0, arg<int>(params, "offset", 0));

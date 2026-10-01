@@ -1989,6 +1989,17 @@ bool GLCanvas3D::make_current_for_postinit() {
 }
 
 // Redraws the scene and presents it.
+bool GLCanvas3D::render_and_capture(const std::function<void()>& read)
+{
+    m_capture_frame = &read;
+    m_presented_signature.reset();   // the "frame already on screen" shortcut would skip the read
+    set_as_dirty();
+    render();
+    const bool captured = m_capture_frame == nullptr;
+    m_capture_frame     = nullptr;
+    return captured;
+}
+
 void GLCanvas3D::render(bool only_init)
 {
     m_presented_signature.reset();
@@ -2236,6 +2247,11 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
 
     if (_is_vhs_filter_enabled())
         _render_vhs_pass(static_cast<unsigned int>(cnv_size.get_width()), static_cast<unsigned int>(cnv_size.get_height()));
+
+    if (m_capture_frame != nullptr) {
+        (*m_capture_frame)();
+        m_capture_frame = nullptr;
+    }
 
     // On Wayland, eglSwapBuffers blocks when the canvas is hidden or
     // occluded. Skip the swap to avoid stalling the render loop.

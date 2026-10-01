@@ -78,10 +78,13 @@ it closes. The server handles this in three ways:
 - **Reaching the dialog.** Posted calls are still processed inside the dialog's nested event loop,
   and each connection has its own thread, so the agent can use `ui_windows`, `ui_tree`, `ui_click`,
   `ui_set_value` and `ui_close` to read and answer it, then `wait_idle`.
-- **Re-entrancy guard.** While a modal dialog is open, or while another tool is still on the UI
-  thread's stack, only tools flagged `ModalSafe` run: perception (`app_info`, `screenshot`,
-  `slicing_status`...) and the `ui_*` tools. Anything else is refused with `-32003`, because it
-  would run under the operation that opened the dialog and could change the model beneath it.
+- **Re-entrancy guard.** While a modal dialog is open, while another tool is still on the UI
+  thread's stack, or whenever a call arrives through any nested event loop (including the
+  `wxYield` of progress bars and popup menus), only tools flagged `ModalSafe` run: perception
+  (`app_info`, `screenshot`, `slicing_status`...) and the `ui_*` tools. Anything else is refused
+  with `-32003`, because it would run in the middle of the operation that opened that loop and
+  could change the model beneath it. With dialogs stacked, the innermost one -- the newest -- is
+  the one addressed and reported.
 
 `ui_click`, `ui_set_value` change events and `ui_menu_invoke` are queued rather than processed
 inline, for the same reason: a handler that opens another dialog must not run on the tool's stack.
@@ -121,6 +124,10 @@ Settings go through the same path as typing in a settings tab: `config_set` load
 the owning tab (marking the preset modified and re-running the option toggles) and then into the
 plater; the preset stays modified until `preset_save` or `preset_discard`, exactly as for a user.
 Filament settings apply to the filament preset shown in the Filament tab.
+
+The `screenshot` of the live view renders a frame and reads it back before the buffers are
+swapped (`GLCanvas3D::render_and_capture`), since the front buffer is undefined wherever another
+window covers it.
 
 Two `Plater` additions exist for this surface: `export_gcode_to()` (the G-code export without its
 file dialog) and `last_slicing_error()` (how the last run of each plate ended, which the GUI only

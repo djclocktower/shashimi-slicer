@@ -803,6 +803,8 @@ public:
     // Signature of the overlay on screen; empty after render(), a paint request or a frame drawn but
     // not shown, so the next frame is presented regardless.
     std::optional<size_t> m_presented_signature;
+    // Set only while render_and_capture() runs: reads the finished frame before it is presented.
+    const std::function<void()>* m_capture_frame{ nullptr };
     GLModel m_plate_shadow_mask;
     std::string m_plate_shadow_mask_key;
     // Depth-based shadow map used to cast object shadows onto other objects and themselves.
@@ -1000,6 +1002,10 @@ public:
     bool has_mouse_capture() const;
 
     void render(bool only_init = false);
+    // Render a full frame and call `read` with it in the back buffer, before the buffers are
+    // swapped (scripted screenshots: the front buffer is undefined where other windows cover
+    // it). False when no frame was rendered.
+    bool render_and_capture(const std::function<void()>& read);
     bool is_rendering_enabled()
     {
         return m_enable_render;

@@ -18,6 +18,8 @@
 #include <stdexcept>
 #include <string>
 
+class wxDialog;
+
 namespace Slic3r { namespace GUI { namespace Mcp {
 
 using json = nlohmann::json;
@@ -89,7 +91,8 @@ void register_ui_tools();
 // {"idle": bool, ...details}
 json app_busy_state();
 
-// Title of the first open modal dialog, or empty.
+// The innermost open modal dialog (the one whose event loop runs), or null; and its title.
+wxDialog*   open_modal_dialog();
 std::string open_modal_title();
 
 }}} // namespace Slic3r::GUI::Mcp

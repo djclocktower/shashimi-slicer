@@ -21082,6 +21082,7 @@ void Plater::center_selection()             { p->center_selection(); }
 void Plater::drop_selection()               { p->drop_selection(); }
 void Plater::mirror(Axis axis)              { p->mirror(axis); }
 void Plater::split_object(bool auto_drop)   { p->split_object(auto_drop); }
+void Plater::split_object(int obj_idx, bool auto_drop) { p->split_object(obj_idx, auto_drop); }
 void Plater::split_volume()                 { p->split_volume(); }
 void Plater::optimize_rotation()
 {

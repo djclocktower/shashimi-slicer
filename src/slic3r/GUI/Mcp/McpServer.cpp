@@ -14,6 +14,7 @@
 
 #include <boost/log/trivial.hpp>
 #include <wx/dialog.h>
+#include <wx/evtloop.h>
 #include <wx/toplevel.h>
 
 #include "slic3r/GUI/GUI_App.hpp"
@@ -61,14 +62,16 @@ struct DepthGuard {
 
 std::string rpc_result(const json& id, const json& result)
 {
-    return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}}.dump();
+    // replace: tool output may carry bytes that are not UTF-8 (file contents, mesh names),
+    // and a throwing dump() on the server thread would terminate the application.
+    return json{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}}.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 std::string rpc_error(const json& id, int code, const std::string& msg, const json& data = json())
 {
     json err{{"code", code}, {"message", msg}};
     if (!data.is_null())
         err["data"] = data;
-    return json{{"jsonrpc", "2.0"}, {"id", id}, {"error", err}}.dump();
+    return json{{"jsonrpc", "2.0"}, {"id", id}, {"error", err}}.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
 // ---- running work on the UI thread -------------------------------------------------------
@@ -161,18 +164,26 @@ Outcome call_on_main(std::function<Outcome()> fn, std::chrono::seconds timeout, 
 
 // ---- dispatch (UI thread) -----------------------------------------------------------------
 
+// Posted calls also run inside nested event loops (modal dialogs, wxYield in progress bars and
+// popup menus), i.e. in the middle of whatever GUI operation opened that loop.
+bool in_nested_loop()
+{
+    const wxEventLoopBase* active = wxEventLoopBase::GetActive();
+    return active != nullptr && (active != wxTheApp->GetMainLoop() || active->IsYielding());
+}
+
 std::string busy_reason(const std::string& modal)
 {
     if (!modal.empty())
         return "a modal dialog is open (\"" + modal + "\"); answer it first with ui_windows / ui_tree / ui_click";
-    return "another request is still running on the UI thread; call wait_idle first";
+    return "the UI is in the middle of another operation; call wait_idle first";
 }
 
 Outcome run_on_main(const std::string& method, const json& params)
 {
     const std::string modal = open_modal_title();
     if (const Tool* tool = find_tool(method)) {
-        if (!(tool->flags & ModalSafe) && (g_depth > 0 || !modal.empty()))
+        if (!(tool->flags & ModalSafe) && (g_depth > 0 || !modal.empty() || in_nested_loop()))
             return Outcome::error(-32003, method + " refused: " + busy_reason(modal));
         DepthGuard guard;
         try {
@@ -185,7 +196,7 @@ Outcome run_on_main(const std::string& method, const json& params)
     }
 #ifdef SLIC3R_CAD
     // Everything not registered here is a Design/CAM tab method, served by its own module.
-    if (g_depth > 0 || !modal.empty())
+    if (g_depth > 0 || !modal.empty() || in_nested_loop())
         return Outcome::error(-32003, method + " refused: " + busy_reason(modal));
     DepthGuard  guard;
     const json  reply = json::parse(cad_mcp_handle_on_main(method, params, json(nullptr)));
@@ -291,16 +302,20 @@ std::string handle_line(const std::string& line)
     if (!params.is_object())
         return rpc_error(id, -32602, "params must be an object");
 
-    try {
-        if (method == "wait_idle")
-            return rpc_result(id, wait_idle(arg<double>(params, "timeout", 300.)));
-    } catch (const ToolError& ex) {
-        return rpc_error(id, ex.code, ex.what());
-    }
-
     const Tool*    tool  = find_tool(method);
     const unsigned flags = tool ? tool->flags : 0;
     const auto     limit = std::chrono::seconds((flags & Long) ? 600 : 60);
+    bool           wait  = false;
+    double         wait_timeout = 600.;
+    try {
+        if (method == "wait_idle")
+            return rpc_result(id, wait_idle(arg<double>(params, "timeout", 300.)));
+        // Checked before dispatch: a malformed value must not be found after the tool ran.
+        wait         = tool && (flags & Waitable) && arg<bool>(params, "wait", false);
+        wait_timeout = arg<double>(params, "timeout", 600.);
+    } catch (const ToolError& ex) {
+        return rpc_error(id, ex.code, ex.what());
+    }
 
     Outcome o = call_on_main([method, params] { return run_on_main(method, params); }, limit, !(flags & ModalSafe));
     switch (o.kind) {
@@ -315,8 +330,8 @@ std::string handle_line(const std::string& line)
     }
 
     json result = std::move(o.result);
-    if (tool && (flags & Waitable) && arg<bool>(params, "wait", false)) {
-        json waited = wait_idle(arg<double>(params, "timeout", 600.));
+    if (wait) {
+        json waited = wait_idle(wait_timeout);
         if (tool->after_wait && !waited.value("blocked_by_dialog", false)) {
             const auto after = tool->after_wait;
             Outcome    s     = call_on_main([after, params] { return Outcome::ok(after(params)); }, std::chrono::seconds(60), false);
@@ -349,7 +364,14 @@ template<class ReadFn, class WriteFn> void serve_lines(ReadFn read_some, WriteFn
                 line.pop_back();
             if (line.empty())
                 continue;
-            std::string reply = handle_line(line);
+            std::string reply;
+            try {
+                reply = handle_line(line);
+            } catch (const std::exception& ex) {   // a detached thread: an escaping exception is std::terminate
+                reply = rpc_error(nullptr, -32000, std::string("internal error: ") + ex.what());
+            } catch (...) {
+                reply = rpc_error(nullptr, -32000, "internal error");
+            }
             reply.push_back('\n');
             if (!write_all(reply))
                 return;
@@ -515,13 +537,22 @@ json param_enum(const std::string& name, json values, const std::string& descrip
     return p;
 }
 
+wxDialog* open_modal_dialog()
+{
+    // Newest first: with dialogs stacked, the last one opened owns the running event loop.
+    for (auto* node = wxTopLevelWindows.GetLast(); node; node = node->GetPrevious())
+        if (auto* dlg = dynamic_cast<wxDialog*>(node->GetData()); dlg && dlg->IsModal())
+            return dlg;
+    return nullptr;
+}
+
 std::string open_modal_title()
 {
-    for (wxWindow* w : wxTopLevelWindows)
-        if (auto* dlg = dynamic_cast<wxDialog*>(w); dlg && dlg->IsModal())
-            return dlg->GetTitle().empty() ? std::string("(untitled ") + wxString(dlg->GetClassInfo()->GetClassName()).utf8_string() + ")"
-                                           : dlg->GetTitle().utf8_string();
-    return {};
+    wxDialog* dlg = open_modal_dialog();
+    if (dlg == nullptr)
+        return {};
+    return dlg->GetTitle().empty() ? std::string("(untitled ") + wxString(dlg->GetClassInfo()->GetClassName()).utf8_string() + ")"
+                                   : dlg->GetTitle().utf8_string();
 }
 
 void start_server_if_enabled()
