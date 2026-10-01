@@ -21,6 +21,12 @@ on:
           required: false
           type: boolean
           default: false
+        # Windows only: build the app and upload the portable zip, nothing else
+        # (no unit tests, NSIS installer, MSIX, PDB or profile validator).
+        quick:
+          required: false
+          type: boolean
+          default: false
 
 jobs:
   build_orca:
@@ -447,7 +453,7 @@ jobs:
         uses: microsoft/setup-msbuild@v3
 
       - name: Install nsis
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && !inputs.quick
         shell: pwsh
         # The Chocolatey community feed intermittently 504s, and `choco install`
         # exits 0 when package resolution fails that way. Unchecked, the job then
@@ -477,12 +483,14 @@ jobs:
         #   WindowsSdkDir: 'C:\Program Files (x86)\Windows Kits\10\'
         #   WindowsSDKVersion: '10.0.26100.0\'
         # --tests builds the unit tests too; the unit_tests_windows_* jobs run them.
+        # A quick build has no test jobs, so it skips them.
         run: |
           # cache-path is the install directory inside the deps build directory.
           $deps = (Split-Path "${{ inputs.cache-path }}").Replace('\', '/')
           # -l compiles with Visual Studio's clang-cl and -x builds with Ninja; --msvc --msbuild is cl under the Visual Studio generator.
           $flags = if ("${{ inputs.compiler }}" -eq "clang") { "-l", "-x" } else { "--msvc", "--msbuild" }
-          .\build_win.bat -s --tests -i --arch ${{ inputs.arch }} --build-dir $env:BUILD_DIR --deps-dir $deps @flags
+          $tests = @(if ("${{ inputs.quick }}" -ne "true") { "--tests" })
+          .\build_win.bat -s @tests -i --arch ${{ inputs.arch }} --build-dir $env:BUILD_DIR --deps-dir $deps @flags
         shell: pwsh
 
       - name: Build system preset cache (Windows)
@@ -493,13 +501,13 @@ jobs:
         run: scripts\build_preset_cache.bat --prune-source "%BUILD_DIR%" "resources\profiles" "%BUILD_DIR%\OrcaSlicer\resources\profiles"
 
       - name: Pack unit tests Win
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !inputs.quick
         working-directory: ${{ github.workspace }}
         shell: pwsh
         run: tar -cvf build_tests.tar ${{ env.BUILD_DIR }}/tests
 
       - name: Upload Test Artifact Win
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !inputs.quick
         uses: actions/upload-artifact@v7
         with:
           name: ${{ github.sha }}-tests-windows-${{ inputs.arch }}
@@ -511,7 +519,7 @@ jobs:
       # NSIS is x86-only; it runs (and the installer it emits runs) under ARM64's
       # x86 emulation, packaging the native arm64 payload from build-arm64.
       - name: Create installer Win
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && !inputs.quick
         working-directory: ${{ github.workspace }}/${{ env.BUILD_DIR }}
         run: |
           cpack -G NSIS
@@ -523,7 +531,7 @@ jobs:
         run: '"C:/Program Files/7-Zip/7z.exe" a -tzip OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}_portable.zip ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer'
 
       - name: Pack PDB
-        if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED && !inputs.quick
         working-directory: ${{ github.workspace }}/${{ env.BUILD_DIR }}/src/Release
         shell: cmd
         run: '"C:/Program Files/7-Zip/7z.exe" a -m0=lzma2 -mx9 Debug_PDB_${{ env.ver }}_for_developers_only.7z  *.pdb'
@@ -536,21 +544,21 @@ jobs:
           path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer
 
       - name: Upload artifacts Win installer
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && !inputs.quick
         uses: actions/upload-artifact@v7
         with:
           name: OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}
           path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer*.exe
 
       - name: Upload artifacts Win PDB
-        if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED && !inputs.quick
         uses: actions/upload-artifact@v7
         with:
           name: PDB
           path: ${{ github.workspace }}/build/src/Release/Debug_PDB_${{ env.ver }}_for_developers_only.7z
 
       - name: Upload OrcaSlicer_profile_validator Win
-        if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED && !inputs.quick
         uses: actions/upload-artifact@v7
         with:
           name: OrcaSlicer_profile_validator_Windows_${{ env.ver }}
@@ -590,7 +598,7 @@ jobs:
           max_releases: 1
 
       - name: Build MSIX Store package Win
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && !inputs.quick
         working-directory: ${{ github.workspace }}
         shell: pwsh
         run: |
@@ -603,7 +611,7 @@ jobs:
             -PublisherDisplayName "${{ vars.ORCA_MSIX_PUBLISHER_DISPLAY_NAME || 'OrcaSlicer' }}"
 
       - name: Upload artifacts Win MSIX
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && !inputs.quick
         uses: actions/upload-artifact@v7
         with:
           name: OrcaSlicer_Windows_MSIX_${{ env.ver }}${{ env.ARCH_SUFFIX }}

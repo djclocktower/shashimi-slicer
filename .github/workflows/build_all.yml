@@ -77,6 +77,12 @@ jobs:
         run: .\scripts\test_build_win.ps1
 
   build_linux:
+    # The build deletes the compiler cache entries its new one supersedes;
+    # with a read-only token that gets a 403 and they pile up until GitHub
+    # evicts caches, the dependency caches included.
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       # SELF_HOSTED skips arm64 (no arm self-hosted server). amd64's empty arch
@@ -95,6 +101,12 @@ jobs:
       build-deps-only: ${{ inputs.build-deps-only || false }}
     secrets: inherit
   build_windows:
+    # The build deletes the compiler cache entries its new one supersedes;
+    # with a read-only token that gets a 403 and they pile up until GitHub
+    # evicts caches, the dependency caches included.
+    permissions:
+      contents: read
+      actions: write
     name: Build Windows ${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -115,6 +127,12 @@ jobs:
       force-build: ${{ github.event_name == 'schedule' }}
     secrets: inherit
   build_macos_arch:
+    # The build deletes the compiler cache entries its new one supersedes;
+    # with a read-only token that gets a 403 and they pile up until GitHub
+    # evicts caches, the dependency caches included.
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -232,6 +250,12 @@ jobs:
           name: test-results-*
           failOnError: false
   flatpak:
+    # The build deletes the compiler cache entries its new one supersedes;
+    # with a read-only token that gets a 403 and they pile up until GitHub
+    # evicts caches, the dependency caches included.
+    permissions:
+      contents: read
+      actions: write
     name: "Flatpak"
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50

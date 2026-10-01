@@ -19,6 +19,9 @@ on:
       force-build:
         required: false
         type: boolean
+      quick:
+        required: false
+        type: boolean
   
 jobs:
   check_cache: # determines if there is a cache and outputs variables used in caching process
@@ -70,4 +73,5 @@ jobs:
       compiler: ${{ inputs.compiler }}
       build-deps-only: ${{ inputs.build-deps-only }}
       force-build: ${{ inputs.force-build }}
+      quick: ${{ inputs.quick || false }}
     secrets: inherit
