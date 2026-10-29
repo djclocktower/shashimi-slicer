@@ -574,6 +574,33 @@ if (SLIC3R_CAD)
         )
 endif ()
 
+# Metrology kernel (Slic3r::Metrology): camera inspection, nozzle-touch probing and reverse
+# engineering for the Measure tab. Headless and dependency-free.
+list(APPEND lisbslic3r_sources
+        Metrology/MetrologyTypes.hpp
+        Metrology/Metrology.hpp
+        Metrology/Budget.cpp
+        Metrology/Budget.hpp
+        Metrology/Calibration.cpp
+        Metrology/Calibration.hpp
+        Metrology/Contour.cpp
+        Metrology/Contour.hpp
+        Metrology/Edges.cpp
+        Metrology/Edges.hpp
+        Metrology/Features.cpp
+        Metrology/Features.hpp
+        Metrology/Geometry.cpp
+        Metrology/Geometry.hpp
+        Metrology/Image.cpp
+        Metrology/Image.hpp
+        Metrology/Probe.cpp
+        Metrology/Probe.hpp
+        Metrology/Reverse.cpp
+        Metrology/Reverse.hpp
+        Metrology/Simulate.cpp
+        Metrology/Simulate.hpp
+    )
+
 # Laser kernel (Slic3r::Laser): LightBurn-style vector/raster laser jobs and G-code. Headless and
 # OCCT-free, but it ships with the CAD workspace, so it shares the SLIC3R_CAD switch.
 if (SLIC3R_CAD)

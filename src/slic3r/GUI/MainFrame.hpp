@@ -62,6 +62,7 @@
 #define TAB_ID_MULTI_DEVICE  "multi_device"
 #define TAB_ID_PROJECT       "project"
 #define TAB_ID_CALIBRATION   "calibration"
+#define TAB_ID_MEASURE       "measure"
 
 #define ENABEL_PRINT_ALL 0
 
@@ -84,6 +85,7 @@ class CadWorkspace;
 class LaserPanel;
 #endif
 class MainFrame;
+class MetrologyPanel;
 class WebViewPanel;
 class ParamsDialog;
 enum class Shortcut : uint8_t;
@@ -481,6 +483,8 @@ public:
     LazyPage<ProjectPanel>* m_project_page{ nullptr };
 
     LazyPage<CalibrationPanel>* m_calibration_page{ nullptr };
+    // Built the first time the Measure tab is shown (never prebuilt).
+    LazyPage<MetrologyPanel>* m_measure_page{ nullptr };
     LazyPage<WebViewPanel>* m_home_page { nullptr };
     LazyPage<PrinterWebView>* m_printer_view_page{nullptr};
     PluginPages           m_plugin_pages;

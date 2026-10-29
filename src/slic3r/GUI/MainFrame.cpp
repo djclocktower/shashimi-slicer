@@ -44,6 +44,7 @@
 #include "slic3r/GUI/CAD/DesignPanel.hpp"
 #include "slic3r/GUI/CAD/McpControl.hpp"
 #endif
+#include "slic3r/GUI/Metrology/MetrologyPanel.hpp"
 #include "WebViewDialog.hpp"
 #include "../Utils/Process.hpp"
 // BBS
@@ -1481,6 +1482,12 @@ void MainFrame::init_tabpanel() {
     m_calibration_page = new LazyPage<CalibrationPanel>(m_tabpanel, TAB_ID_CALIBRATION, 30);
     m_lazy_pages.push_back(m_calibration_page);
     m_tabpanel->AddPage(TAB_ID_CALIBRATION, m_calibration_page, _L("Calibration"), "tab_calibration_active");
+
+    // Camera inspection, probing and reverse engineering. Independent of the printer type: the
+    // simulator and saved frames work for any printer.
+    m_measure_page = new LazyPage<MetrologyPanel>(m_tabpanel, TAB_ID_MEASURE, -1);
+    m_lazy_pages.push_back(m_measure_page);
+    m_tabpanel->AddPage(TAB_ID_MEASURE, m_measure_page, _L("Measure"), "tab_measure_active");
 
     // Plugin pages are appended after the built-in tabs; their ids are namespaced
     // (plugin.<plugin_key>.<name>) so they can't collide with the built-in TAB_ID_* constants.

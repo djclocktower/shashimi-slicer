@@ -71,6 +71,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/Calibration.hpp
     GUI/CalibrationPanel.cpp
     GUI/CalibrationPanel.hpp
+    GUI/Metrology/MetrologyMesh.cpp
+    GUI/Metrology/MetrologyMesh.hpp
+    GUI/Metrology/MetrologyPanel.cpp
+    GUI/Metrology/MetrologyPanel.hpp
+    GUI/Metrology/MetrologyView.cpp
+    GUI/Metrology/MetrologyView.hpp
     GUI/CalibrationWizardCaliPage.cpp
     GUI/CalibrationWizardCaliPage.hpp
     GUI/CalibrationWizard.cpp
