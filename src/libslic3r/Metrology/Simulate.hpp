@@ -27,6 +27,7 @@ struct SimScene
     double                mat_refl   = 0.07;   // black face
     double                dot_refl   = 0.85;
     double                plate_refl = 0.32;
+    double                wall_factor = 0.55;   // side walls get this share of a top face's light
 };
 
 struct SimCamera

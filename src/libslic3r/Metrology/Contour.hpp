@@ -57,7 +57,8 @@ void soften_boundary(Field& f, const std::function<bool(const P2&)>& inside, int
 std::string regions_svg(const std::vector<Region>& regions);
 
 // The outline of a part seen by the camera, traced on the mat plane (z = 0) inside the box lo..hi.
-// threshold < 0 picks one with Otsu over the box. The result is the silhouette: for a part with
+// threshold < 0 places every edge at half its own step from the background (dim side walls and
+// bright top faces alike). The result is the silhouette: for a part with
 // height it still needs the parallax correction (the reverse-engineering session does that).
 std::vector<Region> trace_silhouette(const GrayImage& img, const CameraModel& cam, const P2& lo, const P2& hi, double res,
                                      double threshold, bool part_bright, double simplify_tol, double min_area);

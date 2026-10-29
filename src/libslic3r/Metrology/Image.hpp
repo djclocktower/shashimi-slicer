@@ -21,6 +21,16 @@ GrayImage average(const std::vector<GrayImage>& frames);
 // Otsu threshold over the whole image (or the pixels where mask(x, y) is true).
 double otsu_threshold(const GrayImage& img, const std::function<bool(int, int)>& mask = {});
 
+// Background and part grey levels and a threshold between them that keeps dimly lit side walls
+// with the part: the threshold sits 35% of the way from the background to the part. The
+// background is the darker end for bright parts (part_bright) and the brighter end otherwise.
+// Levels are the 5th and 95th percentiles over the pixels where mask(x, y) is true (all if empty).
+struct Levels
+{
+    double background = 0, part = 255, threshold = 128;
+};
+Levels part_levels(const GrayImage& img, bool part_bright, const std::function<bool(int, int)>& mask = {});
+
 // Mean absolute difference on a 4x subsampled grid: a cheap motion measure between frames.
 double frame_motion(const GrayImage& a, const GrayImage& b);
 

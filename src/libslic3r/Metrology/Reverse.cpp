@@ -476,7 +476,8 @@ ReModel ReSession::build() const
     const double res = m_set.raster;
     lo               = lo - P2{2 * res, 2 * res};
     hi               = hi + P2{2 * res, 2 * res};
-    Field fp = footprint_field(m_silhouette, height_at, lo, hi);
+    std::vector<Region> sil = m_silhouette;
+    Field               fp  = footprint_field(sil, height_at, lo, hi);
     // Camera edge bias from the anchors: the probe found the edge where the nozzle face's rim met
     // it, a tip radius outside; the camera's footprint edge is where the field crosses 0.5.
     std::vector<double> bias;
@@ -497,10 +498,50 @@ ReModel ReSession::build() const
         std::sort(bias.begin(), bias.end());
         model.camera_bias = bias[bias.size() / 2];
         model.anchors     = int(bias.size());
-        if (std::abs(model.camera_bias) > 0.005)
-            fp = footprint_field(offset_regions(m_silhouette, -model.camera_bias), height_at, lo, hi);
+        if (std::abs(model.camera_bias) > 0.005) {
+            sil = offset_regions(m_silhouette, -model.camera_bias);
+            fp  = footprint_field(sil, height_at, lo, hi);
+        }
     } else if (m_set.anchors > 0)
         model.warnings.push_back("No outline anchor was resolved: the camera's edge bias is not corrected.");
+    // Through holes. Seen at an angle, only part of a hole is see-through: its near side shows the
+    // top edge and its far side the bottom edge, so the footprint above keeps just the lens they
+    // overlap in. Mapping each side to its own height puts both arcs on the true outline; a circle
+    // through them restores a round hole.
+    if (m_cam.has_center && m_cam.cz > 0) {
+        std::vector<Region> holes;
+        int                 odd = 0;
+        for (const Region& r : sil)
+            for (const Polygon2& hl : r.holes) {
+                std::vector<P2> pts;
+                const size_t    n = hl.size();
+                for (size_t k = 0; k < n; ++k) {
+                    const P2 d1 = (hl[k] - hl[(k + n - 1) % n]).normalized(), d2 = (hl[(k + 1) % n] - hl[k]).normalized();
+                    const P2 nrm = P2{d1.y + d2.y, -(d1.x + d2.x)}.normalized();   // out of the material, into the hole
+                    const P2 rr  = hl[k] - m_cam.nadir;
+                    if (nrm.dot(rr) > 0) {
+                        const double h = std::max(0.0, height_at(hl[k] - nrm * (m_set.tip_radius + 1.0)));
+                        pts.push_back(m_cam.nadir + rr * ((m_cam.cz - h) / m_cam.cz));
+                    } else
+                        pts.push_back(hl[k]);
+                }
+                const CircleFit c = fit_circle_robust(pts);
+                if (c.ok && pts.size() >= 8 && c.rms < std::max(0.05, 0.03 * c.r)) {
+                    Region disc;
+                    disc.outer = Polygon2();
+                    const int seg = std::max(24, int(2 * kPi * c.r / 0.2));
+                    for (int q = 0; q < seg; ++q) disc.outer.push_back(c.c + P2{std::cos(2 * kPi * q / seg), std::sin(2 * kPi * q / seg)} * c.r);
+                    holes.push_back(std::move(disc));
+                } else
+                    ++odd;
+            }
+        if (!holes.empty()) {
+            const Field hm = rasterize(holes, fp.x0, fp.y0, fp.w, fp.h, fp.res);
+            for (size_t q = 0; q < fp.v.size(); ++q) fp.v[q] = std::min(fp.v[q], 1.f - hm.v[q]);
+        }
+        if (odd > 0)
+            model.warnings.push_back(std::to_string(odd) + " hole(s) are not round and partly hidden from the camera: their shape may be incomplete.");
+    }
     const int W = fp.w, Hh = fp.h;
     for (size_t k = 0; k < H.size(); ++k) {
         ReLevel L;

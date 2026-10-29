@@ -13,6 +13,7 @@
 #include <boost/nowide/fstream.hpp>
 #include <nlohmann/json.hpp>
 
+#include <wx/brush.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
@@ -23,6 +24,7 @@
 #include <wx/image.h>
 #include <wx/listctrl.h>
 #include <wx/msgdlg.h>
+#include <wx/pen.h>
 #include <wx/scrolwin.h>
 #include <wx/simplebook.h>
 #include <wx/sizer.h>
@@ -84,6 +86,13 @@ wxStaticText* hint(wxWindow* parent, const wxString& text, int wrap)
     return t;
 }
 
+// Sets a result label and wraps it to the page width.
+void set_wrapped(wxStaticText* t, const wxString& text)
+{
+    t->SetLabel(text);
+    t->Wrap(t->FromDIP(470));
+}
+
 wxListCtrl* report(wxWindow* parent, const std::vector<std::pair<wxString, int>>& columns, int height)
 {
     auto* l = new wxListCtrl(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, height), wxLC_REPORT | wxBORDER_SIMPLE);
@@ -108,7 +117,7 @@ MetrologyPanel::MetrologyPanel(wxWindow* parent) : wxPanel(parent, wxID_ANY)
     m_view = new MetrologyView(this);
     mid->Add(m_view, 1, wxEXPAND);
     m_pages = new wxSimplebook(this, wxID_ANY);
-    m_pages->SetMinSize(wxSize(FromDIP(420), -1));
+    m_pages->SetMinSize(wxSize(FromDIP(500), -1));
     m_pages->AddPage(build_inspect_page(m_pages), "");
     m_pages->AddPage(build_calibrate_page(m_pages), "");
     m_pages->AddPage(build_trace_page(m_pages), "");
@@ -297,7 +306,7 @@ wxWindow* MetrologyPanel::build_inspect_page(wxWindow* parent)
     s->Add(label(p, _L("Inspection program"), true), 0, wxALL, 8);
     s->Add(hint(p, _L("Pick Line, Circle or Width in the tool strip and drag over an edge in the image. Every feature "
                       "re-runs on each new frame. Give a feature a tolerance to get an OK/NG judgement."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxLEFT | wxRIGHT, 8);
     auto* g = new wxFlexGridSizer(2, 4, 8);
     g->AddGrowableCol(1);
@@ -322,7 +331,7 @@ wxWindow* MetrologyPanel::build_inspect_page(wxWindow* parent)
     s->Add(bright, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
     m_features = report(p,
-                        {{_L("No."), 40}, {_L("Name"), 90}, {_L("Measured"), 80}, {_L("Nominal"), 64}, {_L("Tol."), 70},
+                        {{_L("No."), 40}, {_L("Name"), 90}, {_L("Measured"), 100}, {_L("Nominal"), 64}, {_L("Tol."), 90},
                          {_L("Dev."), 64}, {_L("Judge"), 50}},
                         FromDIP(260));
     m_features->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent&) { m_view->Refresh(); });
@@ -355,7 +364,7 @@ wxWindow* MetrologyPanel::build_calibrate_page(wxWindow* parent)
     s->Add(label(p, _L("Measuring mat"), true), 0, wxALL, 8);
     s->Add(hint(p, _L("Lay the printed measuring mat on the plate, whole and flat, with its marker dot in view. "
                       "Detect it in a frame taken at the bed height you will measure at."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxLEFT | wxRIGHT, 8);
     auto* g = new wxFlexGridSizer(2, 4, 8);
     g->AddGrowableCol(1);
@@ -380,7 +389,7 @@ wxWindow* MetrologyPanel::build_calibrate_page(wxWindow* parent)
     s->Add(hint(p, _L("Raise the bed towards the camera by a known amount (on a P1P, lower Z) and add a frame of the mat. "
                       "The camera's position comes out of how much the dots spread. It is needed for parallax "
                       "correction and for reading probe touches."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxALL, 8);
     auto* g2 = new wxFlexGridSizer(2, 4, 8);
     g2->AddGrowableCol(1);
@@ -406,7 +415,7 @@ wxWindow* MetrologyPanel::build_calibrate_page(wxWindow* parent)
     add_number(p, g3, _L("Known distance (mm)"), m_two_point_mm, 0.1, 1000, 1, 3);
     s->Add(g3, 0, wxEXPAND | wxALL, 8);
     s->Add(hint(p, _L("Pick 2-Point and click both ends of the known distance. Only flat, straight-on work is accurate this way."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxLEFT | wxRIGHT, 8);
     auto* r2   = new wxBoxSizer(wxHORIZONTAL);
     auto* save = new wxButton(p, wxID_ANY, _L("Save calibration"));
@@ -428,7 +437,7 @@ wxWindow* MetrologyPanel::build_trace_page(wxWindow* parent)
     s->Add(label(p, _L("Outline trace"), true), 0, wxALL, 8);
     s->Add(hint(p, _L("Pick Box and drag around the part. The outline is traced on the mat plane. For a part with "
                       "height, Reverse Engineer corrects it for parallax using probe heights."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxLEFT | wxRIGHT, 8);
     auto* g = new wxFlexGridSizer(2, 4, 8);
     g->AddGrowableCol(1);
@@ -461,7 +470,7 @@ wxWindow* MetrologyPanel::build_reverse_page(wxWindow* parent)
     s->Add(hint(p, _L("1. Calibrate the mat and the camera height.  2. Pick Box and drag around the part.  3. Start, then "
                       "run each batch of touches: in the simulator, or as G-code on the printer with the heights read "
                       "back from the camera frames.  4. Build the model and send it to the plate."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxLEFT | wxRIGHT, 8);
     auto* g = new wxFlexGridSizer(2, 4, 8);
     g->AddGrowableCol(1);
@@ -518,7 +527,7 @@ wxWindow* MetrologyPanel::build_probe_page(wxWindow* parent)
     s->Add(hint(p, _L("Untested on hardware. The G-code raises the bed with G380 until the nozzle touches, then holds so the "
                       "camera can see where the bed stopped. Run it first on an empty plate with the filament unloaded and "
                       "the nozzle cold, and be ready to stop the print."),
-                FromDIP(390)),
+                FromDIP(470)),
            0, wxLEFT | wxRIGHT, 8);
     auto* g = new wxFlexGridSizer(2, 4, 8);
     g->AddGrowableCol(1);
@@ -825,7 +834,7 @@ void MetrologyPanel::detect_mat()
     wxBusyCursor busy;
     m_cal = M::calibrate_mat(m_frame, m_mat);
     if (!m_cal.ok) {
-        m_cal_result->SetLabel(wxString::FromUTF8(m_cal.error));
+        set_wrapped(m_cal_result, wxString::FromUTF8(m_cal.error));
         set_status(wxString::FromUTF8(m_cal.error));
         return;
     }
@@ -834,7 +843,7 @@ void MetrologyPanel::detect_mat()
     m_raised.clear();
     m_raised_offsets.clear();
     m_raised_list->DeleteAllItems();
-    m_cal_result->SetLabel(wxString::Format(_L("%d of %d dots, residual %.3f mm RMS, %.3f mm per pixel at the mat centre."), m_cal.matched,
+    set_wrapped(m_cal_result, wxString::Format(_L("%d of %d dots, residual %.3f mm RMS, %.3f mm per pixel at the mat centre."), m_cal.matched,
                                             m_cal.expected, m_cal.rms_mm, m_cal.mm_per_px));
     refresh_cal_status();
     save_settings();
@@ -879,7 +888,7 @@ void MetrologyPanel::solve_camera()
         set_status(wxString::FromUTF8(err));
         return;
     }
-    m_cal_result->SetLabel(m_cal_result->GetLabel() + "\n" +
+    set_wrapped(m_cal_result, m_cal_result->GetLabel() + "\n" +
                            wxString::Format(_L("Camera %.1f mm above the mat, over X %.1f Y %.1f mm."), m_cam.cz, m_cam.nadir.x, m_cam.nadir.y));
     refresh_cal_status();
     save_settings();
@@ -1048,7 +1057,7 @@ void MetrologyPanel::do_trace()
     }
     P2 lo, hi;
     M::bounding_box(m_trace, lo, hi);
-    m_trace_info->SetLabel(m_trace.empty() ? _L("No outline found in the box.")
+    set_wrapped(m_trace_info, m_trace.empty() ? _L("No outline found in the box.")
                                            : wxString::Format(_L("%d outline(s), %d hole(s)\nArea %.2f mm², perimeter %.2f mm\nSize %.3f x %.3f mm"),
                                                               int(m_trace.size()), int(holes), area, perim, hi.x - lo.x, hi.y - lo.y));
     m_view->Refresh();
@@ -1323,7 +1332,7 @@ void MetrologyPanel::refresh_re()
     }
     const int    remaining = m_re.estimate_remaining();
     const double secs      = (remaining + int(m_re.pending().size())) * (m_probe.hold_s + 5.0);
-    m_re_state->SetLabel(wxString::Format(_L("Stage: %s | touches done %d | rounds %d | batch %d | about %d more (%.0f min on a P1P)"),
+    set_wrapped(m_re_state, wxString::Format(_L("Stage: %s | touches done %d | rounds %d | batch %d | about %d more (%.0f min on a P1P)"),
                                           stage, m_re.touches_done(), m_re.rounds(), int(m_re.pending().size()), remaining, secs / 60));
     m_re_batch->DeleteAllItems();
     long row = 0;
@@ -1373,11 +1382,11 @@ void MetrologyPanel::analyze_frames()
     std::vector<double> off;
     wxString            err;
     if (!offsets_from_folder(dlg.GetPath(), 0, off, err)) {
-        m_probe_result->SetLabel(err);
+        set_wrapped(m_probe_result, err);
         return;
     }
     const M::RepeatStats st = M::repeat_stats(off);
-    m_probe_result->SetLabel(wxString::Format(_L("%d holds: spread %.4f mm, 1σ %.4f mm.\n%s"), st.n, st.range, st.stddev,
+    set_wrapped(m_probe_result, wxString::Format(_L("%d holds: spread %.4f mm, 1σ %.4f mm.\n%s"), st.n, st.range, st.stddev,
                                               st.n < 2           ? _L("Too few holds to judge.")
                                               : st.range < 0.03 ? _L("Under 0.03 mm: the touch probe idea works on this printer.")
                                                                  : _L("Over 0.03 mm: heights will be coarse; edges may still work.")));
@@ -1392,7 +1401,7 @@ void MetrologyPanel::refresh_budget()
     if (m_cam.ok) in.mm_per_px = m_cam.mm_per_px;
     in.trigger = m_trigger;
     const M::BudgetResult r = M::budget(in);
-    m_budget_text->SetLabel(wxString::Format(_L("At %.3f mm/px (±2σ):\nheight per touch ±%.3f mm\nprobe edge ±%.3f mm\ncamera edge ±%.3f mm"),
+    set_wrapped(m_budget_text, wxString::Format(_L("At %.3f mm/px (±2σ):\nheight per touch ±%.3f mm\nprobe edge ±%.3f mm\ncamera edge ±%.3f mm"),
                                              in.mm_per_px, 2 * r.height, 2 * r.edge, 2 * r.camera_edge));
 }
 

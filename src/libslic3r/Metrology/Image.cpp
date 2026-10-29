@@ -82,6 +82,23 @@ double otsu_threshold(const GrayImage& img, const std::function<bool(int, int)>&
     return thr;
 }
 
+Levels part_levels(const GrayImage& img, bool part_bright, const std::function<bool(int, int)>& mask)
+{
+    Levels             L;
+    std::vector<float> v;
+    const int          step = std::max(1, int(std::sqrt(double(img.w) * img.h / 200000.0)));
+    for (int y = 0; y < img.h; y += step)
+        for (int x = 0; x < img.w; x += step)
+            if (!mask || mask(x, y)) v.push_back(img.at(x, y));
+    if (v.size() < 10) return L;
+    std::sort(v.begin(), v.end());
+    const double lo = v[v.size() * 5 / 100], hi = v[v.size() * 95 / 100];
+    L.background = part_bright ? lo : hi;
+    L.part       = part_bright ? hi : lo;
+    L.threshold  = L.background + 0.35 * (L.part - L.background);
+    return L;
+}
+
 double frame_motion(const GrayImage& a, const GrayImage& b)
 {
     if (a.w != b.w || a.h != b.h || a.empty()) return 1e9;

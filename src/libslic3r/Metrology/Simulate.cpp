@@ -103,6 +103,9 @@ GrayImage sim_render(const SimScene& scene, const SimCamera& cam, double offset,
         bounding_box({pr.footprint}, b.lo, b.hi);
         boxes.push_back(b);
     }
+    std::vector<size_t> order(scene.prisms.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return scene.prisms[a].height < scene.prisms[b].height; });
     for (int v = 0; v < cam.h; ++v)
         for (int u = 0; u < cam.w; ++u) {
             const double xc = (u - ph.cx) / ph.focal, yc = (v - ph.cy) / ph.focal;
@@ -129,11 +132,14 @@ GrayImage sim_render(const SimScene& scene, const SimCamera& cam, double offset,
                 }
                 const double mat_val = scene.mat_refl * (1 - dot_cov) + scene.dot_refl * dot_cov;
                 val                  = scene.plate_refl * (1 - mat_cov) + mat_val * mat_cov;
-                // Parts: the deepest a ray gets inside any prism slice along its height.
-                double obj_sd = -1e9, refl = 0.75;
-                for (size_t k = 0; k < scene.prisms.size(); ++k) {
+                // Parts, shortest first so taller ones cover them. A ray inside a prism's top slice
+                // sees its top face; inside a lower slice only, it sees a side wall, which the
+                // overhead light reaches less.
+                for (size_t k : order) {
                     const SimPrism& pr = scene.prisms[k];
-                    const int       S  = 10;
+                    // Enough slices that the wall's silhouette does not show steps.
+                    const int       S  = std::min(80, std::max(10, int(std::ceil(pr.height / (0.4 * sig)))));
+                    double          sd_any = -1e9, sd_top = -1e9;
                     for (int s = 0; s <= S; ++s) {
                         const double z = pr.height * s / S;
                         const double t = (z - ph.C.z) / dir.z;
@@ -142,15 +148,15 @@ GrayImage sim_render(const SimScene& scene, const SimCamera& cam, double offset,
                         const double m = 6 * sig + 1;
                         if (q.x < boxes[k].lo.x - m || q.y < boxes[k].lo.y - m || q.x > boxes[k].hi.x + m || q.y > boxes[k].hi.y + m) continue;
                         const double sd = signed_distance(pr.footprint, q);
-                        if (sd > obj_sd) {
-                            obj_sd = sd;
-                            refl   = pr.reflectance;
-                        }
+                        sd_any          = std::max(sd_any, sd);
+                        if (s == S) sd_top = sd;
                     }
-                }
-                if (obj_sd > -1e8) {
-                    const double cov = phi((obj_sd + cam.edge_bias_mm) / sig);
-                    val              = val * (1 - cov) + refl * cov;
+                    if (sd_any < -1e8) continue;
+                    const double cov = phi((sd_any + cam.edge_bias_mm) / sig);
+                    if (cov <= 1e-6) continue;
+                    const double top = std::min(1.0, phi((sd_top + cam.edge_bias_mm) / sig) / cov);
+                    const double col = pr.reflectance * (top + (1 - top) * scene.wall_factor);
+                    val              = val * (1 - cov) + col * cov;
                 }
             }
             double I = (light_on ? cam.light * val : 0.0) + cam.ambient * (1 + cam.ambient_tilt * (double(u) / cam.w - 0.5)) +

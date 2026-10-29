@@ -1,5 +1,7 @@
 #include "Features.hpp"
 
+#include "Image.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -50,29 +52,37 @@ void Program::remove(int id)
     }
 }
 
-// Edge points onto the plate. Seen at an angle, a part's outline is its top edge where the
-// material's outward normal faces away from the camera's nadir and its bottom edge elsewhere, so
-// each point is mapped onto the plane it actually lies on.
-static std::vector<P2> to_mm(const std::vector<EdgeHit>& hits, const CameraModel& cam, double z, bool part_bright)
+// Edge points onto the plate. An edge against the background is the part's outline: seen at an
+// angle it is the top edge where the material's outward normal faces away from the camera's nadir
+// and the bottom edge elsewhere. An edge against more of the part (a step, a wall) is a top edge.
+// Each point is mapped onto the plane it actually lies on.
+static std::vector<P2> to_mm(const std::vector<EdgeHit>& hits, const GrayImage& img, const Levels& lv, const CameraModel& cam, double z,
+                             bool part_bright)
 {
     std::vector<P2> out;
     for (const EdgeHit& h : hits) {
-        const P2 p0 = cam.to_plane(h.p, 0.0);
+        const P2 pz = cam.to_plane(h.p, z);
         if (z <= 0 || !cam.has_center) {
-            out.push_back(p0);
+            out.push_back(z <= 0 ? cam.to_plane(h.p, 0.0) : pz);
             continue;
         }
         // Out of the material is towards the dark side for a bright part.
-        const bool rising  = h.strength > 0;   // dark to light along the scan
-        const P2   out_px  = (rising == part_bright) ? h.dir * -1.0 : h.dir;
-        const P2   pz      = cam.to_plane(h.p, z);
-        const P2   out_mm  = cam.to_plane(h.p + out_px, z) - pz;
-        out.push_back(out_mm.dot(pz - cam.nadir) > 0 ? pz : p0);
+        const bool   rising = h.strength > 0;   // dark to light along the scan
+        const P2     out_px = (rising == part_bright) ? h.dir * -1.0 : h.dir;
+        const P2     probe  = h.p + out_px * 4.0;
+        const double beyond = img.sample(probe.x, probe.y);
+        const bool   background = part_bright ? beyond < lv.threshold : beyond > lv.threshold;
+        if (!background) {
+            out.push_back(pz);
+            continue;
+        }
+        const P2 out_mm = cam.to_plane(h.p + out_px, z) - pz;
+        out.push_back(out_mm.dot(pz - cam.nadir) > 0 ? pz : cam.to_plane(h.p, 0.0));
     }
     return out;
 }
 
-static void run_primitive(Feature& f, const GrayImage& img, const CameraModel& cam, bool part_bright)
+static void run_primitive(Feature& f, const GrayImage& img, const Levels& lv, const CameraModel& cam, bool part_bright)
 {
     f.edge_px.clear();
     f.edge2_px.clear();
@@ -84,7 +94,7 @@ static void run_primitive(Feature& f, const GrayImage& img, const CameraModel& c
             f.error = "Fewer than 3 edge points: move the box over a clear edge or lower the contrast threshold.";
             return;
         }
-        f.line = fit_line_robust(to_mm(hits, cam, f.plane_z, part_bright));
+        f.line = fit_line_robust(to_mm(hits, img, lv, cam, f.plane_z, part_bright));
         if (!f.line.ok) {
             f.error = "The line fit failed.";
             return;
@@ -101,7 +111,7 @@ static void run_primitive(Feature& f, const GrayImage& img, const CameraModel& c
             f.error = "Fewer than 5 edge points: centre the ring on the circle's edge.";
             return;
         }
-        f.circle = fit_circle_robust(to_mm(hits, cam, f.plane_z, part_bright));
+        f.circle = fit_circle_robust(to_mm(hits, img, lv, cam, f.plane_z, part_bright));
         if (!f.circle.ok) {
             f.error = "The circle fit failed.";
             return;
@@ -120,7 +130,7 @@ static void run_primitive(Feature& f, const GrayImage& img, const CameraModel& c
             f.error = "Fewer than 3 scans found two edges: the box must span both edges.";
             return;
         }
-        const auto a = to_mm(h1, cam, f.plane_z, part_bright), b = to_mm(h2, cam, f.plane_z, part_bright);
+        const auto a = to_mm(h1, img, lv, cam, f.plane_z, part_bright), b = to_mm(h2, img, lv, cam, f.plane_z, part_bright);
         f.line  = fit_line_robust(a);
         f.line2 = fit_line_robust(b);
         if (!f.line.ok || !f.line2.ok) {
@@ -167,8 +177,9 @@ void Program::run(const GrayImage& img, const CameraModel& cam)
         f.error.clear();
         f.verdict = Judge::None;
     }
+    const Levels lv = part_levels(img, part_bright);
     for (Feature& f : features)
-        if (f.kind == FeatureKind::Line || f.kind == FeatureKind::Circle || f.kind == FeatureKind::Width) run_primitive(f, img, cam, part_bright);
+        if (f.kind == FeatureKind::Line || f.kind == FeatureKind::Circle || f.kind == FeatureKind::Width) run_primitive(f, img, lv, cam, part_bright);
     for (Feature& f : features) {
         if (f.kind != FeatureKind::Distance && f.kind != FeatureKind::Angle) continue;
         const Feature* a = find(f.ref_a);

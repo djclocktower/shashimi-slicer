@@ -195,8 +195,30 @@ std::vector<Region> trace_silhouette(const GrayImage& img, const CameraModel& ca
     const int w = int(std::ceil((hi.x - lo.x) / res)), h = int(std::ceil((hi.y - lo.y) / res));
     if (w <= 1 || h <= 1 || double(w) * h > 4.0e7) return {};
     const GrayImage rect = rectify(img, [&cam](const P2& p) { return cam.to_px(p, 0.0); }, lo.x, lo.y, w, h, res);
-    const double    thr  = threshold >= 0 ? threshold : otsu_threshold(rect);
-    return contour_regions(field_from_image(rect, lo.x, lo.y, res), float(thr), part_bright, simplify_tol, min_area);
+    if (threshold >= 0) return contour_regions(field_from_image(rect, lo.x, lo.y, res), float(threshold), part_bright, simplify_tol, min_area);
+    // Each edge at half its own step: brightness above the background as a fraction of the brightest
+    // part nearby, so a dim side wall and a bright top face both meet the background at 0.5.
+    const Levels lv  = part_levels(rect, part_bright);
+    const double sgn = part_bright ? 1.0 : -1.0;
+    const int    r   = std::max(2, int(std::lround(0.6 / res)));
+    GrayImage    rel(w, h), tmp(w, h), peak(w, h);
+    for (size_t i = 0; i < rel.px.size(); ++i) rel.px[i] = float(sgn * (rect.px[i] - lv.background));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float m = rel.at(x, y);
+            for (int k = std::max(0, x - r); k <= std::min(w - 1, x + r); ++k) m = std::max(m, rel.at(k, y));
+            tmp.at(x, y) = m;
+        }
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float m = tmp.at(x, y);
+            for (int k = std::max(0, y - r); k <= std::min(h - 1, y + r); ++k) m = std::max(m, tmp.at(x, k));
+            peak.at(x, y) = m;
+        }
+    const double min_step = 0.25 * std::abs(lv.part - lv.background);
+    Field        f(w, h, lo.x, lo.y, res);
+    for (size_t i = 0; i < f.v.size(); ++i) f.v[i] = peak.px[i] > min_step ? std::max(0.f, rel.px[i]) / peak.px[i] : 0.f;
+    return contour_regions(f, 0.5f, true, simplify_tol, min_area);
 }
 
 std::string regions_svg(const std::vector<Region>& regions)

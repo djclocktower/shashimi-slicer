@@ -190,6 +190,13 @@ TEST_CASE("Reverse engineering rebuilds the bracket's levels and outline", "[Met
     CHECK_THAT(model.levels[2].z, WithinAbs(10.0, 0.01));
     // Footprint: 64 x 44 with two 6.4 mm through holes.
     CHECK_THAT(region_area(model.footprint), WithinRel(64 * 44 - 2 * kPi * 3.2 * 3.2, 0.02));
+    // Both through holes come back round and full size, though the camera only sees through part of each.
+    REQUIRE(model.footprint.size() == 1);
+    REQUIRE(model.footprint[0].holes.size() == 2);
+    for (const Polygon2& h : model.footprint[0].holes) {
+        const CircleFit c = fit_circle(h);
+        CHECK_THAT(c.r, WithinAbs(3.2, 0.1));
+    }
     // At least 10 mm tall: the 20 x 44 wall.
     CHECK_THAT(region_area(model.levels[2].regions), WithinRel(20.0 * 44, 0.03));
     // At least 7 mm tall: the wall plus the 14 mm boss.
